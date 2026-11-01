@@ -117,7 +117,7 @@ export class PerformanceOutput {
         );
         if (child === null) return;
         const { document } = child;
-        document.title = 'Operator Performance';
+        document.title = 'Sandpiper Performance';
         document.body.style.cssText =
             'margin:0;background:#000;overflow:hidden';
         const canvas = document.createElement('canvas');

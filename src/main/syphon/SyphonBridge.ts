@@ -3,12 +3,12 @@ import path from 'node:path';
 import { app, type BrowserWindow } from 'electron';
 
 /**
- * Manages the headless `operator-syphon` helper that captures the Operator
+ * Manages the headless `sandpiper-syphon` helper that captures the Sandpiper
  * window via ScreenCaptureKit and republishes it as a Syphon source.
  *
  * macOS only. The helper is a separate signed executable spawned as a plain
  * child of this process, so macOS attributes the Screen Recording permission to
- * the responsible process (Operator) — one prompt, one "Operator" entry.
+ * the responsible process (Sandpiper) — one prompt, one "Sandpiper" entry.
  */
 
 export type SyphonStatus =
@@ -19,7 +19,7 @@ export type SyphonStatus =
     | 'error';
 
 /** Syphon source name advertised to clients (Resolume, VDMX, MadMapper, …). */
-const SERVER_NAME = 'Operator';
+const SERVER_NAME = 'Sandpiper';
 const DEFAULT_FPS = 60;
 const RESTART_DELAY_MS = 1500;
 /**
@@ -110,12 +110,12 @@ export class SyphonBridge {
     /** Path to the bundled helper binary, dev vs packaged. */
     private helperPath(): string {
         if (app.isPackaged) {
-            // Contents/Resources/operator-syphon (NOT Contents/MacOS — see the
+            // Contents/Resources/sandpiper-syphon (NOT Contents/MacOS — see the
             // staging hook in forge.config.ts for why a second Mach-O beside the
             // main executable breaks codesign). Syphon.framework sits at
             // Contents/Frameworks, resolved via @rpath = @executable_path/../Frameworks,
             // which points there from Resources just as it did from MacOS.
-            return path.join(process.resourcesPath, 'operator-syphon');
+            return path.join(process.resourcesPath, 'sandpiper-syphon');
         }
         // Dev: the dist/ mirror produced by scripts/build-syphon-bridge.mjs.
         // __dirname is <root>/.vite/build in the forge+vite dev build.
@@ -127,7 +127,7 @@ export class SyphonBridge {
             'syphon-bridge',
             'dist',
             'MacOS',
-            'operator-syphon',
+            'sandpiper-syphon',
         );
     }
 

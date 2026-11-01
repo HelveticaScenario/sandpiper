@@ -7,9 +7,9 @@
 //!
 //! | OS      | Path                                              |
 //! |---------|---------------------------------------------------|
-//! | macOS   | `~/Library/Logs/Operator/`                        |
-//! | Linux   | `~/.config/Operator/logs/`                        |
-//! | Windows | `%APPDATA%\Operator\logs\`                        |
+//! | macOS   | `~/Library/Logs/Sandpiper/`                        |
+//! | Linux   | `~/.config/Sandpiper/logs/`                        |
+//! | Windows | `%APPDATA%\Sandpiper\logs\`                        |
 //!
 //! Falls back to the system temp dir if the relevant env var is unset. Calls
 //! the previously installed panic hook so stderr output is preserved.
@@ -42,7 +42,7 @@ pub fn panic_log_dir() -> PathBuf {
     {
         if let Some(home) = std::env::var_os("HOME") {
             let mut p = PathBuf::from(home);
-            p.push("Library/Logs/Operator");
+            p.push("Library/Logs/Sandpiper");
             return p;
         }
     }
@@ -50,7 +50,7 @@ pub fn panic_log_dir() -> PathBuf {
     {
         if let Some(home) = std::env::var_os("HOME") {
             let mut p = PathBuf::from(home);
-            p.push(".config/Operator/logs");
+            p.push(".config/Sandpiper/logs");
             return p;
         }
     }
@@ -58,12 +58,12 @@ pub fn panic_log_dir() -> PathBuf {
     {
         if let Some(appdata) = std::env::var_os("APPDATA") {
             let mut p = PathBuf::from(appdata);
-            p.push("Operator");
+            p.push("Sandpiper");
             p.push("logs");
             return p;
         }
     }
-    std::env::temp_dir().join("operator-panic-logs")
+    std::env::temp_dir().join("sandpiper-panic-logs")
 }
 
 fn write_panic_log(info: &panic::PanicHookInfo<'_>) -> std::io::Result<()> {
@@ -97,7 +97,7 @@ fn write_panic_log(info: &panic::PanicHookInfo<'_>) -> std::io::Result<()> {
 
     let backtrace = Backtrace::force_capture();
 
-    writeln!(f, "==== Operator panic ====")?;
+    writeln!(f, "==== Sandpiper panic ====")?;
     writeln!(f, "epoch: {epoch}")?;
     writeln!(f, "pid:   {pid}")?;
     writeln!(f, "thread: {thread_name}")?;

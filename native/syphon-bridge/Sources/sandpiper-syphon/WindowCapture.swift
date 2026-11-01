@@ -28,7 +28,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     private let device: MTLDevice
     private var textureCache: CVMetalTextureCache?
     private var stream: SCStream?
-    private let sampleQueue = DispatchQueue(label: "dev.operator.syphon.capture", qos: .userInteractive)
+    private let sampleQueue = DispatchQueue(label: "dev.sandpiper.syphon.capture", qos: .userInteractive)
 
     /// Called on the sample queue for each complete frame.
     var onTexture: ((MTLTexture, CVMetalTexture) -> Void)?

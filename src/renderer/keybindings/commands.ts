@@ -1,5 +1,5 @@
 /**
- * Operator command registry.
+ * Sandpiper command registry.
  *
  * Global, process-wide map of command id -> handler + metadata. Modeled
  * after VS Code's `CommandsRegistry`. Pure JS: no Monaco / Electron coupling

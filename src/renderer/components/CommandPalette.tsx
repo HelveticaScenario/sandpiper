@@ -2,7 +2,7 @@
  * Workbench-level command palette (cmdk).
  *
  * Rendered at the App root so it works regardless of whether a Monaco editor
- * is currently mounted. Sources its rows from `buildPaletteItems` — Operator
+ * is currently mounted. Sources its rows from `buildPaletteItems` — Sandpiper
  * registry commands plus, when an editor exists, every supported Monaco
  * editor action.
  */

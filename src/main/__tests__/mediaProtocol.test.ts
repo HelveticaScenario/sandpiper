@@ -46,10 +46,10 @@ describe('media files', () => {
     it('never resolves outside the workspace folder, however the path is written', () => {
         for (const url of [
             mediaUrl('../secret.png'),
-            'operator-media://workspace/%2e%2e/secret.png',
-            'operator-media://workspace/%2E%2E%2Fsecret.png',
+            'sandpiper-media://workspace/%2e%2e/secret.png',
+            'sandpiper-media://workspace/%2E%2E%2Fsecret.png',
             mediaUrl('pictures/../../secret.png'),
-            'operator-media://workspace/..%5Csecret.png',
+            'sandpiper-media://workspace/..%5Csecret.png',
         ]) {
             const resolved = resolveMediaFile(root, url);
             expect(stays(resolved)).toBe(true);
@@ -59,7 +59,7 @@ describe('media files', () => {
 
     it('refuses the workspace folder itself, a bad URL, or no workspace', () => {
         expect(
-            resolveMediaFile(root, 'operator-media://workspace/'),
+            resolveMediaFile(root, 'sandpiper-media://workspace/'),
         ).toBeNull();
         expect(resolveMediaFile(root, 'https://example.com/a.png')).toBeNull();
         expect(
@@ -282,7 +282,7 @@ describe('serving network media', () => {
         protocolMock.fetch.mockClear();
         const response = await handler(
             new Request(
-                `operator-media://remote/${encodeURIComponent('file:///etc/passwd')}`,
+                `sandpiper-media://remote/${encodeURIComponent('file:///etc/passwd')}`,
             ),
         );
         expect(response.status).toBe(404);

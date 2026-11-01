@@ -20,7 +20,7 @@ if (app.commandLine.hasSwitch(CPU_PROBE_SWITCH)) {
 } else if (ensureCpuSupported()) {
     import('./app').catch((err: unknown) =>
         failStartup(
-            'Operator failed to start',
+            'Sandpiper failed to start',
             err instanceof Error ? (err.stack ?? err.message) : String(err),
         ),
     );

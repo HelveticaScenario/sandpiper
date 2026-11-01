@@ -20,20 +20,20 @@
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:modular}/native/syphon-bridge",
-            "name": "Debug operator-syphon (native/syphon-bridge)",
-            "target": "operator-syphon",
+            "name": "Debug sandpiper-syphon (native/syphon-bridge)",
+            "target": "sandpiper-syphon",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug operator-syphon (native/syphon-bridge)"
+            "preLaunchTask": "swift: Build Debug sandpiper-syphon (native/syphon-bridge)"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:modular}/native/syphon-bridge",
-            "name": "Release operator-syphon (native/syphon-bridge)",
-            "target": "operator-syphon",
+            "name": "Release sandpiper-syphon (native/syphon-bridge)",
+            "target": "sandpiper-syphon",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release operator-syphon (native/syphon-bridge)"
+            "preLaunchTask": "swift: Build Release sandpiper-syphon (native/syphon-bridge)"
         }
     ],
     "compounds": [

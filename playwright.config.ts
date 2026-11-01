@@ -1,5 +1,5 @@
 /**
- * Playwright E2E test configuration for the Operator Electron app.
+ * Playwright E2E test configuration for the Sandpiper Electron app.
  *
  * Usage:
  *   yarn test:e2e           — run all E2E tests

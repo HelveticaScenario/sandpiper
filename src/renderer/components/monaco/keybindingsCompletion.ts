@@ -5,13 +5,13 @@
  * (VS Code sources these from `RawContextKey.all()`).
  *
  * VS Code drives `command` from a JSON schema and `when` from a dedicated
- * provider; Operator unifies both into one Monaco completion provider scoped
+ * provider; Sandpiper unifies both into one Monaco completion provider scoped
  * to the keybindings buffer, which keeps the two sources of suggestions in
  * one place and avoids fighting the existing config.json schema registration.
  *
  * Command ids are offered in VS Code's vocabulary: each internal dispatch id is
  * rewritten to its `authoringId` (see `vscodeKeys`), so a user completes (and
- * copies) `workbench.action.files.save` rather than Operator's `operator.save`.
+ * copies) `workbench.action.files.save` rather than Sandpiper's `sandpiper.save`.
  */
 import type { Monaco } from '../../hooks/useCustomMonaco';
 import type { editor, languages, Position } from 'monaco-editor';
@@ -50,7 +50,7 @@ export function detectKeybindingCompletion(
 
 /**
  * Every command id offerable in a `command` value, with a display label. Ids
- * are collected in Operator's internal dispatch form (registry, then the
+ * are collected in Sandpiper's internal dispatch form (registry, then the
  * editor's supported actions, then the curated catalog — earlier sources win a
  * label), then rewritten to VS Code's vocabulary via `authoringId` so an
  * aliased command is offered under its VS Code id and not its dispatch target.
