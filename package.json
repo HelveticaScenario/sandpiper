@@ -1,7 +1,7 @@
 {
     "name": "@modular/app",
     "productName": "Sandpiper",
-    "version": "0.0.133",
+    "version": "0.0.134",
     "description": "Sandpiper - a real-time modular synthesizer desktop app with a JavaScript DSL for live-coding audio patches",
     "main": ".vite/build/main.js",
     "repository": {
