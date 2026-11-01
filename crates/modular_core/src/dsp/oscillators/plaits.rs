@@ -443,7 +443,7 @@ impl Plaits {
             let level_val = self.params.level.value_or(ch, 0.0);
             let level_mod = (level_val / 8.0).clamp(0.0, 1.0);
 
-            // Operator merges Plaits' knob + CV jack into a single port per
+            // Sandpiper merges Plaits' knob + CV jack into a single port per
             // destination, so harmonics/timbre/morph have no concept of an
             // external modulation source: the glided signal feeds the
             // patch.* base values, and timbreAmt / morphAmt route the

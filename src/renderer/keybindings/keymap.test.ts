@@ -12,18 +12,18 @@ import type { DefaultKeybinding } from './defaultKeymap';
 import { installKeymap, mergeKeymap, setWhenEvaluator } from './keymap';
 
 const SAMPLE_DEFAULTS: DefaultKeybinding[] = [
-    { key: '$mod+Enter', command: 'operator.updatePatch' },
-    { key: '$mod+.', command: 'operator.stop' },
-    { key: '$mod+s', command: 'operator.save' },
+    { key: '$mod+Enter', command: 'sandpiper.updatePatch' },
+    { key: '$mod+.', command: 'sandpiper.stop' },
+    { key: '$mod+s', command: 'sandpiper.save' },
 ];
 
 describe('mergeKeymap', () => {
     test('canonicalizes default keys ($mod -> platform modifier) on darwin', () => {
         const merged = mergeKeymap(SAMPLE_DEFAULTS, [], 'darwin');
         expect(merged).toEqual([
-            { key: 'Meta+Enter', command: 'operator.updatePatch' },
-            { key: 'Meta+.', command: 'operator.stop' },
-            { key: 'Meta+s', command: 'operator.save' },
+            { key: 'Meta+Enter', command: 'sandpiper.updatePatch' },
+            { key: 'Meta+.', command: 'sandpiper.stop' },
+            { key: 'Meta+s', command: 'sandpiper.save' },
         ]);
     });
 
@@ -42,8 +42,8 @@ describe('mergeKeymap', () => {
         ];
         const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides, 'darwin');
         expect(merged.map((e) => e.command)).toEqual([
-            'operator.stop',
-            'operator.save',
+            'sandpiper.stop',
+            'sandpiper.save',
         ]);
     });
 
@@ -51,22 +51,22 @@ describe('mergeKeymap', () => {
         // `cmd+enter` (VS Code) and `$mod+Enter` (default) are one chord on
         // darwin, so the `-` removal cancels the default.
         const overrides: KeybindingOverride[] = [
-            { key: 'cmd+enter', command: '-operator.updatePatch' },
+            { key: 'cmd+enter', command: '-sandpiper.updatePatch' },
         ];
         const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides, 'darwin');
-        expect(merged.some((e) => e.command === 'operator.updatePatch')).toBe(
+        expect(merged.some((e) => e.command === 'sandpiper.updatePatch')).toBe(
             false,
         );
     });
 
     test('non-null user entry is appended after defaults (key translated)', () => {
         const overrides: KeybindingOverride[] = [
-            { key: 'cmd+k', command: 'operator.openSettings' },
+            { key: 'cmd+k', command: 'sandpiper.openSettings' },
         ];
         const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides, 'darwin');
         expect(merged.at(-1)).toEqual({
             key: 'Meta+k',
-            command: 'operator.openSettings',
+            command: 'sandpiper.openSettings',
         });
         expect(merged).toHaveLength(SAMPLE_DEFAULTS.length + 1);
     });
@@ -100,7 +100,7 @@ describe('mergeKeymap', () => {
 
     test('a mac-only line-insert default never shadows the Ctrl transport key off darwin', () => {
         const defaults: DefaultKeybinding[] = [
-            { key: 'Control+Enter', command: 'operator.updatePatch' },
+            { key: 'Control+Enter', command: 'sandpiper.updatePatch' },
             {
                 key: '',
                 mac: '$mod+enter',
@@ -112,12 +112,12 @@ describe('mergeKeymap', () => {
         // Update Patch only.
         expect(
             mergeKeymap(defaults, [], 'other').map((e) => e.command),
-        ).toEqual(['operator.updatePatch']);
+        ).toEqual(['sandpiper.updatePatch']);
         // darwin: both bound, on distinct physical keys.
         const mac = Object.fromEntries(
             mergeKeymap(defaults, [], 'darwin').map((e) => [e.key, e.command]),
         );
-        expect(mac['Control+Enter']).toBe('operator.updatePatch');
+        expect(mac['Control+Enter']).toBe('sandpiper.updatePatch');
         expect(mac['Meta+Enter']).toBe('editor.action.insertLineAfter');
     });
 
@@ -133,12 +133,12 @@ describe('mergeKeymap', () => {
     test('remove + replace pattern leaves only the replacement', () => {
         const overrides: KeybindingOverride[] = [
             { key: '$mod+Enter', command: null },
-            { key: '$mod+Enter', command: 'operator.stop' },
+            { key: '$mod+Enter', command: 'sandpiper.stop' },
         ];
         const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides, 'darwin');
         const enterEntries = merged.filter((e) => e.key === 'Meta+Enter');
         expect(enterEntries).toEqual([
-            { key: 'Meta+Enter', command: 'operator.stop' },
+            { key: 'Meta+Enter', command: 'sandpiper.stop' },
         ]);
     });
 
@@ -146,7 +146,7 @@ describe('mergeKeymap', () => {
         const defaults: DefaultKeybinding[] = [
             {
                 key: '$mod+Enter',
-                command: 'operator.updatePatch',
+                command: 'sandpiper.updatePatch',
                 when: 'editorFocused',
             },
         ];
@@ -162,7 +162,7 @@ describe('mergeKeymap', () => {
         expect(merged).toEqual([
             {
                 key: 'Meta+Enter',
-                command: 'operator.updatePatch',
+                command: 'sandpiper.updatePatch',
                 when: 'editorFocused',
             },
             {
@@ -179,14 +179,14 @@ describe('mergeKeymap', () => {
             { key: '$mod+s', command: 'workbench.action.files.save' },
             { key: 'Control+g', command: 'workbench.action.gotoLine' },
             { key: '$mod+Shift+o', command: 'workbench.action.gotoSymbol' },
-            // Operator-native: no VS Code id, so it passes through unchanged.
-            { key: 'Control+.', command: 'operator.stop' },
+            // Sandpiper-native: no VS Code id, so it passes through unchanged.
+            { key: 'Control+.', command: 'sandpiper.stop' },
         ];
         expect(mergeKeymap(defaults, [], 'darwin')).toEqual([
-            { key: 'Meta+s', command: 'operator.save' },
+            { key: 'Meta+s', command: 'sandpiper.save' },
             { key: 'Control+g', command: 'editor.action.gotoLine' },
             { key: 'Shift+Meta+o', command: 'editor.action.quickOutline' },
-            { key: 'Control+.', command: 'operator.stop' },
+            { key: 'Control+.', command: 'sandpiper.stop' },
         ]);
     });
 
@@ -204,7 +204,7 @@ describe('mergeKeymap', () => {
 
     test('a default and a user rebind of one action share a canonical command id', () => {
         // Default binds Save under its VS Code id; the user rebinds Save to a
-        // new key, also under the VS Code id. Both resolve to operator.save.
+        // new key, also under the VS Code id. Both resolve to sandpiper.save.
         const defaults: DefaultKeybinding[] = [
             { key: '$mod+s', command: 'workbench.action.files.save' },
         ];
@@ -213,8 +213,8 @@ describe('mergeKeymap', () => {
         ];
         const merged = mergeKeymap(defaults, overrides, 'darwin');
         expect(merged).toEqual([
-            { key: 'Meta+s', command: 'operator.save' },
-            { key: 'Shift+Meta+s', command: 'operator.save' },
+            { key: 'Meta+s', command: 'sandpiper.save' },
+            { key: 'Shift+Meta+s', command: 'sandpiper.save' },
         ]);
     });
 });
@@ -283,7 +283,7 @@ describe('installKeymap', () => {
         target.dispatchEvent(event);
 
         expect(trigger).toHaveBeenCalledWith(
-            'operator.keybinding',
+            'sandpiper.keybinding',
             'editor.action.fooBar',
             undefined,
         );

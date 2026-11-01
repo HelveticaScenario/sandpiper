@@ -500,7 +500,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'camera',
         group: 'Generators',
         description:
-            'The live picture of a camera as a color. It is read at the coordinate being drawn, so warps, kaleidoscopes and feedback move it like any other pattern. The first time a patch uses it the system asks whether Operator may use the camera; if that is refused, allow it under System Settings, Privacy & Security, Camera, and restart Operator.',
+            'The live picture of a camera as a color. It is read at the coordinate being drawn, so warps, kaleidoscopes and feedback move it like any other pattern. The first time a patch uses it the system asks whether Sandpiper may use the camera; if that is refused, allow it under System Settings, Privacy & Security, Camera, and restart Sandpiper.',
         params: [
             {
                 name: 'config.device',
@@ -525,7 +525,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'screen',
         group: 'Generators',
         description:
-            'The live picture of a display as a color, read at the coordinate being drawn like `$v.camera`. The first time a patch uses it the system must allow Operator to record the screen, under System Settings, Privacy & Security, Screen Recording; after allowing it, restart Operator. Showing the display Operator itself is on draws the picture into itself, which makes a tunnel.',
+            'The live picture of a display as a color, read at the coordinate being drawn like `$v.camera`. The first time a patch uses it the system must allow Sandpiper to record the screen, under System Settings, Privacy & Security, Screen Recording; after allowing it, restart Sandpiper. Showing the display Sandpiper itself is on draws the picture into itself, which makes a tunnel.',
         params: [
             {
                 name: 'config.display',

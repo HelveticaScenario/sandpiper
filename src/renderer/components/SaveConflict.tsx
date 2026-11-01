@@ -98,7 +98,7 @@ export function SaveConflictDiff({
             >
                 <div className="save-conflict-header">
                     <h2>
-                        {name} (in file) ↔ {name} (in Operator) - Resolve save
+                        {name} (in file) ↔ {name} (in Sandpiper) - Resolve save
                         conflict
                     </h2>
                     <button

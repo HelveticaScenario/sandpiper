@@ -2,12 +2,12 @@
  * Build the unified command-palette item list shown by `CommandPalette`.
  *
  * Sources merged each time the palette opens:
- *   1. Every entry in the Operator command registry (label + category).
+ *   1. Every entry in the Sandpiper command registry (label + category).
  *   2. When a Monaco editor instance exists, every action returned by
  *      `editor.getSupportedActions()` that reports `isSupported() === true`.
  *
  * Monaco actions get a fixed `"Editor"` category badge so they sort together
- * in the palette UI and so users can quickly tell them apart from Operator
+ * in the palette UI and so users can quickly tell them apart from Sandpiper
  * commands.
  */
 import type { editor } from 'monaco-editor';
@@ -40,7 +40,7 @@ export type PaletteItem =
           run: () => void;
       };
 
-function operatorItem(
+function sandpiperItem(
     id: string,
     metadata: CommandMetadata | undefined,
 ): PaletteItem {
@@ -84,7 +84,7 @@ function editorActionItem(
 /**
  * Build the merged item list. Pass the current editor instance (if any) so
  * Monaco's editor actions can be enumerated; with zero buffers open and
- * therefore no editor, the result contains only Operator commands.
+ * therefore no editor, the result contains only Sandpiper commands.
  */
 export function buildPaletteItems(
     activeEditor: editor.ICodeEditor | null,
@@ -92,7 +92,7 @@ export function buildPaletteItems(
     const items: PaletteItem[] = [];
 
     for (const { id, metadata } of listCommands()) {
-        items.push(operatorItem(id, metadata));
+        items.push(sandpiperItem(id, metadata));
     }
 
     if (activeEditor) {

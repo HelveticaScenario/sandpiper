@@ -4,7 +4,7 @@
  * Patches the development Electron.app Info.plist with Local Network
  * permission keys required for Ableton Link (mDNS/Bonjour discovery), the
  * camera usage string that `$v.camera` needs for the system to ask, and
- * names the bundle "Operator Dev (<checkout folder>)" so the macOS menu bar
+ * names the bundle "Sandpiper Dev (<checkout folder>)" so the macOS menu bar
  * and Dock tell dev builds from different worktrees apart. The name matches
  * the dev app name set in src/main/app.ts.
  *
@@ -43,9 +43,9 @@ if (!existsSync(plist)) {
 }
 
 const description =
-    'Operator uses the local network to sync tempo with other music apps via Ableton Link.';
+    'Sandpiper uses the local network to sync tempo with other music apps via Ableton Link.';
 const bonjourService = '_SessionStatus._tcp';
-const bundleName = `Operator Dev (${basename(root)})`;
+const bundleName = `Sandpiper Dev (${basename(root)})`;
 
 function plistBuddy(command) {
     try {
@@ -75,7 +75,7 @@ function setString(key, value) {
 setString('NSLocalNetworkUsageDescription', description);
 setString(
     'NSCameraUsageDescription',
-    'Operator shows the camera in video patches that use $v.camera.',
+    'Sandpiper shows the camera in video patches that use $v.camera.',
 );
 setString('CFBundleName', 'Electron');
 setString('CFBundleDisplayName', 'Electron');

@@ -1,11 +1,11 @@
 {
     "name": "@modular/core",
     "version": "0.0.1-0",
-    "description": "Native Rust DSP engine for Operator",
+    "description": "Native Rust DSP engine for Sandpiper",
     "main": "index.js",
     "repository": {
         "type": "git",
-        "url": "https://github.com/HelveticaScenario/operator.git"
+        "url": "https://github.com/HelveticaScenario/sandpiper.git"
     },
     "license": "AGPL",
     "module": "index.js",
@@ -23,7 +23,7 @@
         "schemas.json"
     ],
     "napi": {
-        "binaryName": "operator",
+        "binaryName": "sandpiper",
         "targets": [
             "x86_64-pc-windows-msvc",
             "x86_64-apple-darwin",

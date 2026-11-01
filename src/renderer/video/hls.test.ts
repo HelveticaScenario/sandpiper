@@ -50,7 +50,7 @@ describe('proxyLoader', () => {
     it('asks for the address through the app', () => {
         const { sent } = request();
         expect(sent.context.url).toBe(
-            `operator-media://remote/${encodeURIComponent(remote)}`,
+            `sandpiper-media://remote/${encodeURIComponent(remote)}`,
         );
         expect(sent.context.responseType).toBe('text');
     });

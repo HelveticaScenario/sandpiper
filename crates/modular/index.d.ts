@@ -29,9 +29,9 @@ export declare class Synthesizer {
   /**
    * Absolute path to the directory where panic logs are written. Matches
    * Electron's `app.getPath('logs')` convention per OS:
-   * - macOS:   `~/Library/Logs/Operator/`
-   * - Linux:   `~/.config/Operator/logs/`
-   * - Windows: `%APPDATA%\Operator\logs\`
+   * - macOS:   `~/Library/Logs/Sandpiper/`
+   * - Linux:   `~/.config/Sandpiper/logs/`
+   * - Windows: `%APPDATA%\Sandpiper\logs\`
    */
   panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>

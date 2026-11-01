@@ -335,7 +335,7 @@ describe('SourceTextures', () => {
             const sources = new SourceTextures(fakeDevice(), vi.fn());
             sources.sync([video(mp4)]);
             expect(videos[0].getAttribute('src')).toBe(
-                `operator-media://remote/${encodeURIComponent(mp4)}`,
+                `sandpiper-media://remote/${encodeURIComponent(mp4)}`,
             );
             expect(hls.attach).not.toHaveBeenCalled();
         });

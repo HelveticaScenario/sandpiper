@@ -136,7 +136,7 @@ function App() {
     const keybindingsPathRef = useRef<string | null>(null);
     const handleFileSaved = useCallback((filePath: string) => {
         if (filePath === keybindingsPathRef.current) {
-            window.dispatchEvent(new Event('operator:keybindings-changed'));
+            window.dispatchEvent(new Event('sandpiper:keybindings-changed'));
         }
     }, []);
 
@@ -1801,7 +1801,7 @@ function App() {
         eqController,
     ]);
 
-    // Keep Link phase indicator live while Link is enabled but Operator is stopped.
+    // Keep Link phase indicator live while Link is enabled but Sandpiper is stopped.
     // The main tick loop only runs when isClockRunning; this fills the gap so
     // the phase indicator stays animated even before the user presses play.
     useEffect(() => {
@@ -2201,7 +2201,7 @@ function App() {
             getVuOutputs: () => vuOutputsRef.current,
             getEqPanels: () => eqController.snapshot(),
             isClockRunning: () => isClockRunningRef.current,
-            newUntitledFile: () => executeCommand('operator.newFile'),
+            newUntitledFile: () => executeCommand('sandpiper.newFile'),
             openEngineHealth: () => setIsEngineHealthOpen(true),
             openModuleProfile: () => setIsModuleProfileOpen(true),
             setEditorValue: (code: string) => editorRef.current?.setValue(code),
@@ -2301,13 +2301,13 @@ function App() {
             .catch(() => {});
     }, []);
 
-    // Register operator.* commands in the global registry. The Electron menu
+    // Register sandpiper.* commands in the global registry. The Electron menu
     // IPC dispatchers below, the cmdk palette, the editor context menu, and
     // the tinykeys keymap all dispatch through `executeCommand` — single
     // source of truth for what each command does.
     useEffect(() => {
         registerCommand(
-            'operator.updatePatch',
+            'sandpiper.updatePatch',
             () => {
                 handleSubmitRef.current('NextBar');
             },
@@ -2318,7 +2318,7 @@ function App() {
             },
         );
         registerCommand(
-            'operator.updatePatchNextBeat',
+            'sandpiper.updatePatchNextBeat',
             () => {
                 handleSubmitRef.current('NextBeat');
             },
@@ -2329,7 +2329,7 @@ function App() {
             },
         );
         registerCommand(
-            'operator.stop',
+            'sandpiper.stop',
             () => {
                 handleStopRef.current();
             },
@@ -2340,7 +2340,7 @@ function App() {
             },
         );
         registerCommand(
-            'operator.cancelQueuedUpdate',
+            'sandpiper.cancelQueuedUpdate',
             () => {
                 void electronAPI.synthesizer.cancelQueuedUpdate();
             },
@@ -2351,14 +2351,14 @@ function App() {
             },
         );
         registerCommand(
-            'operator.newFile',
+            'sandpiper.newFile',
             () => {
                 createUntitledFileRef.current();
             },
             { label: 'New File', category: 'File' },
         );
         registerCommand(
-            'operator.closeBuffer',
+            'sandpiper.closeBuffer',
             () => {
                 const id = activeBufferIdRef.current;
                 if (id) {
@@ -2368,28 +2368,28 @@ function App() {
             { label: 'Close Buffer', category: 'File' },
         );
         registerCommand(
-            'operator.save',
+            'sandpiper.save',
             () => {
                 handleSaveFileRef.current();
             },
             { label: 'Save', category: 'File' },
         );
         registerCommand(
-            'operator.openWorkspace',
+            'sandpiper.openWorkspace',
             () => {
                 handleOpenWorkspaceRef.current();
             },
             { label: 'Open Workspace…', category: 'File' },
         );
         registerCommand(
-            'operator.openSettings',
+            'sandpiper.openSettings',
             () => {
                 setIsSettingsOpen(true);
             },
             { label: 'Open Settings', category: 'Preferences' },
         );
         registerCommand(
-            'operator.showCommandPalette',
+            'sandpiper.showCommandPalette',
             () => {
                 setIsPaletteOpen(true);
             },
@@ -2400,7 +2400,7 @@ function App() {
             },
         );
         registerCommand(
-            'operator.openKeybindings',
+            'sandpiper.openKeybindings',
             () => {
                 void handleOpenKeybindingsRef.current();
             },
@@ -2410,7 +2410,7 @@ function App() {
             },
         );
         registerCommand(
-            'operator.toggleVuMeters',
+            'sandpiper.toggleVuMeters',
             () => {
                 setIsVuPanelVisible((visible) => {
                     void electronAPI.config.write({
@@ -2422,14 +2422,14 @@ function App() {
             { label: 'Toggle VU Meters', category: 'View' },
         );
         registerCommand(
-            'operator.togglePerformanceWindow',
+            'sandpiper.togglePerformanceWindow',
             () => {
                 performanceOutput.toggle();
             },
             { label: 'Toggle Performance Window', category: 'View' },
         );
         registerCommand(
-            'operator.togglePerformanceCode',
+            'sandpiper.togglePerformanceCode',
             () => {
                 void electronAPI.config.read().then((config) =>
                     electronAPI.config.write({
@@ -2443,20 +2443,20 @@ function App() {
         );
 
         return () => {
-            unregisterCommand('operator.togglePerformanceWindow');
-            unregisterCommand('operator.togglePerformanceCode');
-            unregisterCommand('operator.toggleVuMeters');
-            unregisterCommand('operator.updatePatch');
-            unregisterCommand('operator.updatePatchNextBeat');
-            unregisterCommand('operator.stop');
-            unregisterCommand('operator.cancelQueuedUpdate');
-            unregisterCommand('operator.newFile');
-            unregisterCommand('operator.closeBuffer');
-            unregisterCommand('operator.save');
-            unregisterCommand('operator.openWorkspace');
-            unregisterCommand('operator.openSettings');
-            unregisterCommand('operator.showCommandPalette');
-            unregisterCommand('operator.openKeybindings');
+            unregisterCommand('sandpiper.togglePerformanceWindow');
+            unregisterCommand('sandpiper.togglePerformanceCode');
+            unregisterCommand('sandpiper.toggleVuMeters');
+            unregisterCommand('sandpiper.updatePatch');
+            unregisterCommand('sandpiper.updatePatchNextBeat');
+            unregisterCommand('sandpiper.stop');
+            unregisterCommand('sandpiper.cancelQueuedUpdate');
+            unregisterCommand('sandpiper.newFile');
+            unregisterCommand('sandpiper.closeBuffer');
+            unregisterCommand('sandpiper.save');
+            unregisterCommand('sandpiper.openWorkspace');
+            unregisterCommand('sandpiper.openSettings');
+            unregisterCommand('sandpiper.showCommandPalette');
+            unregisterCommand('sandpiper.openKeybindings');
         };
     }, []);
 
@@ -2469,7 +2469,7 @@ function App() {
         void electronAPI.syphon.isSupported().then((supported) => {
             if (!active || !supported) return;
             registerCommand(
-                'operator.toggleSyphon',
+                'sandpiper.toggleSyphon',
                 () => {
                     void electronAPI.syphon.toggle();
                 },
@@ -2478,7 +2478,7 @@ function App() {
         });
         return () => {
             active = false;
-            unregisterCommand('operator.toggleSyphon');
+            unregisterCommand('sandpiper.toggleSyphon');
         };
     }, []);
 
@@ -2488,32 +2488,32 @@ function App() {
         // toggling it reads render-state isRecording directly, hence this
         // effect's dependency on it.
         const cleanupNewFile = electronAPI.onMenuNewFile(() => {
-            executeCommand('operator.newFile');
+            executeCommand('sandpiper.newFile');
         });
         const cleanupSave = electronAPI.onMenuSave(() => {
-            executeCommand('operator.save');
+            executeCommand('sandpiper.save');
         });
         const cleanupStop = electronAPI.onMenuStop(() => {
-            executeCommand('operator.stop');
+            executeCommand('sandpiper.stop');
         });
         const cleanupCancelQueuedUpdate = electronAPI.onMenuCancelQueuedUpdate(
             () => {
-                executeCommand('operator.cancelQueuedUpdate');
+                executeCommand('sandpiper.cancelQueuedUpdate');
             },
         );
         const cleanupUpdate = electronAPI.onMenuUpdatePatch(() => {
-            executeCommand('operator.updatePatch');
+            executeCommand('sandpiper.updatePatch');
         });
         const cleanupUpdateNextBeat = electronAPI.onMenuUpdatePatchNextBeat(
             () => {
-                executeCommand('operator.updatePatchNextBeat');
+                executeCommand('sandpiper.updatePatchNextBeat');
             },
         );
         const cleanupOpenWorkspace = electronAPI.onMenuOpenWorkspace(() => {
-            executeCommand('operator.openWorkspace');
+            executeCommand('sandpiper.openWorkspace');
         });
         const cleanupCloseBuffer = electronAPI.onMenuCloseBuffer(() => {
-            executeCommand('operator.closeBuffer');
+            executeCommand('sandpiper.closeBuffer');
         });
         const cleanupToggleRecording = electronAPI.onMenuToggleRecording(() => {
             if (isRecording) {
@@ -2526,16 +2526,16 @@ function App() {
         });
 
         const cleanupToggleVuMeters = electronAPI.onMenuToggleVuMeters(() => {
-            executeCommand('operator.toggleVuMeters');
+            executeCommand('sandpiper.toggleVuMeters');
         });
         const cleanupTogglePerformanceWindow =
             electronAPI.onMenuTogglePerformanceWindow(() => {
-                executeCommand('operator.togglePerformanceWindow');
+                executeCommand('sandpiper.togglePerformanceWindow');
             });
 
         // Handle opening settings from menu (Cmd+,)
         const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
-            executeCommand('operator.openSettings');
+            executeCommand('sandpiper.openSettings');
         });
         const cleanupOpenEngineHealth = electronAPI.onMenuOpenEngineHealth(
             () => {
@@ -2691,7 +2691,7 @@ function App() {
         };
     }, [isRecording]);
 
-    // Install the window-level tinykeys keymap. Runs after the operator.*
+    // Install the window-level tinykeys keymap. Runs after the sandpiper.*
     // commands above have been registered (effects fire in declaration order),
     // so dispatch always finds a handler. The loader merges user overrides
     // from `<userData>/keybindings.json` on top of `DEFAULT_KEYMAP`.
@@ -2719,11 +2719,11 @@ function App() {
         install();
         // Re-read and re-install when the user saves keybindings.json.
         const onChanged = () => install();
-        window.addEventListener('operator:keybindings-changed', onChanged);
+        window.addEventListener('sandpiper:keybindings-changed', onChanged);
         return () => {
             disposed = true;
             window.removeEventListener(
-                'operator:keybindings-changed',
+                'sandpiper:keybindings-changed',
                 onChanged,
             );
             disposer?.();

@@ -1,5 +1,5 @@
 /** Scheme the app serves workspace media over; the host part is a fixed label. */
-export const MEDIA_SCHEME = 'operator-media';
+export const MEDIA_SCHEME = 'sandpiper-media';
 const MEDIA_HOST = 'workspace';
 const REMOTE_HOST = 'remote';
 

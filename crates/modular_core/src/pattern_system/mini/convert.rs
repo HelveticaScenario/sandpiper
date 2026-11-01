@@ -67,7 +67,7 @@ pub enum ConvertError {
     InvalidAtom(String),
     /// Lists are not supported for this type.
     ListNotSupported,
-    /// Operator error.
+    /// Sandpiper error.
     OperatorError(String),
     /// Operation requires rest support but pattern type doesn't support rests.
     RestNotSupported(String),
@@ -78,7 +78,7 @@ impl std::fmt::Display for ConvertError {
         match self {
             ConvertError::InvalidAtom(msg) => write!(f, "Invalid atom: {}", msg),
             ConvertError::ListNotSupported => write!(f, "List syntax not supported for this type"),
-            ConvertError::OperatorError(msg) => write!(f, "Operator error: {}", msg),
+            ConvertError::OperatorError(msg) => write!(f, "Sandpiper error: {}", msg),
             ConvertError::RestNotSupported(op) => write!(
                 f,
                 "'{}' requires a pattern type that supports rests. This operation is only available for note/sequence patterns.",

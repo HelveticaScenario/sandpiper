@@ -74,7 +74,7 @@ function requireNative() {
   } else if (process.platform === 'android') {
     if (process.arch === 'arm64') {
       try {
-        return require('./operator.android-arm64.node')
+        return require('./sandpiper.android-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -90,7 +90,7 @@ function requireNative() {
       }
     } else if (process.arch === 'arm') {
       try {
-        return require('./operator.android-arm-eabi.node')
+        return require('./sandpiper.android-arm-eabi.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -111,7 +111,7 @@ function requireNative() {
     if (process.arch === 'x64') {
       if (process.config?.variables?.shlib_suffix === 'dll.a' || process.config?.variables?.node_target_type === 'shared_library') {
         try {
-        return require('./operator.win32-x64-gnu.node')
+        return require('./sandpiper.win32-x64-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -127,7 +127,7 @@ function requireNative() {
       }
       } else {
         try {
-        return require('./operator.win32-x64-msvc.node')
+        return require('./sandpiper.win32-x64-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -144,7 +144,7 @@ function requireNative() {
       }
     } else if (process.arch === 'ia32') {
       try {
-        return require('./operator.win32-ia32-msvc.node')
+        return require('./sandpiper.win32-ia32-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -160,7 +160,7 @@ function requireNative() {
       }
     } else if (process.arch === 'arm64') {
       try {
-        return require('./operator.win32-arm64-msvc.node')
+        return require('./sandpiper.win32-arm64-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -179,7 +179,7 @@ function requireNative() {
     }
   } else if (process.platform === 'darwin') {
     try {
-      return require('./operator.darwin-universal.node')
+      return require('./sandpiper.darwin-universal.node')
     } catch (e) {
       loadErrors.push(e)
     }
@@ -195,7 +195,7 @@ function requireNative() {
     }
     if (process.arch === 'x64') {
       try {
-        return require('./operator.darwin-x64.node')
+        return require('./sandpiper.darwin-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -211,7 +211,7 @@ function requireNative() {
       }
     } else if (process.arch === 'arm64') {
       try {
-        return require('./operator.darwin-arm64.node')
+        return require('./sandpiper.darwin-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -231,7 +231,7 @@ function requireNative() {
   } else if (process.platform === 'freebsd') {
     if (process.arch === 'x64') {
       try {
-        return require('./operator.freebsd-x64.node')
+        return require('./sandpiper.freebsd-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -247,7 +247,7 @@ function requireNative() {
       }
     } else if (process.arch === 'arm64') {
       try {
-        return require('./operator.freebsd-arm64.node')
+        return require('./sandpiper.freebsd-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -268,7 +268,7 @@ function requireNative() {
     if (process.arch === 'x64') {
       if (isMusl()) {
         try {
-          return require('./operator.linux-x64-musl.node')
+          return require('./sandpiper.linux-x64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -284,7 +284,7 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./operator.linux-x64-gnu.node')
+          return require('./sandpiper.linux-x64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -302,7 +302,7 @@ function requireNative() {
     } else if (process.arch === 'arm64') {
       if (isMusl()) {
         try {
-          return require('./operator.linux-arm64-musl.node')
+          return require('./sandpiper.linux-arm64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -318,7 +318,7 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./operator.linux-arm64-gnu.node')
+          return require('./sandpiper.linux-arm64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -336,7 +336,7 @@ function requireNative() {
     } else if (process.arch === 'arm') {
       if (isMusl()) {
         try {
-          return require('./operator.linux-arm-musleabihf.node')
+          return require('./sandpiper.linux-arm-musleabihf.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -352,7 +352,7 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./operator.linux-arm-gnueabihf.node')
+          return require('./sandpiper.linux-arm-gnueabihf.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -370,7 +370,7 @@ function requireNative() {
     } else if (process.arch === 'loong64') {
       if (isMusl()) {
         try {
-          return require('./operator.linux-loong64-musl.node')
+          return require('./sandpiper.linux-loong64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -386,7 +386,7 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./operator.linux-loong64-gnu.node')
+          return require('./sandpiper.linux-loong64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -404,7 +404,7 @@ function requireNative() {
     } else if (process.arch === 'riscv64') {
       if (isMusl()) {
         try {
-          return require('./operator.linux-riscv64-musl.node')
+          return require('./sandpiper.linux-riscv64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -420,7 +420,7 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./operator.linux-riscv64-gnu.node')
+          return require('./sandpiper.linux-riscv64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
@@ -437,7 +437,7 @@ function requireNative() {
       }
     } else if (process.arch === 'ppc64') {
       try {
-        return require('./operator.linux-ppc64-gnu.node')
+        return require('./sandpiper.linux-ppc64-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -453,7 +453,7 @@ function requireNative() {
       }
     } else if (process.arch === 's390x') {
       try {
-        return require('./operator.linux-s390x-gnu.node')
+        return require('./sandpiper.linux-s390x-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -473,7 +473,7 @@ function requireNative() {
   } else if (process.platform === 'openharmony') {
     if (process.arch === 'arm64') {
       try {
-        return require('./operator.openharmony-arm64.node')
+        return require('./sandpiper.openharmony-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -489,7 +489,7 @@ function requireNative() {
       }
     } else if (process.arch === 'x64') {
       try {
-        return require('./operator.openharmony-x64.node')
+        return require('./sandpiper.openharmony-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -505,7 +505,7 @@ function requireNative() {
       }
     } else if (process.arch === 'arm') {
       try {
-        return require('./operator.openharmony-arm.node')
+        return require('./sandpiper.openharmony-arm.node')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -533,7 +533,7 @@ if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
   let wasiBinding = null
   let wasiBindingError = null
   try {
-    wasiBinding = require('./operator.wasi.cjs')
+    wasiBinding = require('./sandpiper.wasi.cjs')
     nativeBinding = wasiBinding
   } catch (err) {
     if (process.env.NAPI_RS_FORCE_WASI) {

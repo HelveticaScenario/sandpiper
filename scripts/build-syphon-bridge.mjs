@@ -5,7 +5,7 @@
  * (`native/syphon-bridge`) and stages it under `native/syphon-bridge/dist/`
  * mirroring the packaged layout:
  *
- *   dist/MacOS/operator-syphon          <- the helper executable
+ *   dist/MacOS/sandpiper-syphon          <- the helper executable
  *   dist/Frameworks/Syphon.framework    <- vendored Syphon (reached via @rpath ../Frameworks)
  *
  * macOS only — silently skips elsewhere (the feature is macOS-exclusive).
@@ -168,15 +168,15 @@ const binDir = execFileSync(
 )
     .toString()
     .trim();
-const binPath = join(binDir, 'operator-syphon');
+const binPath = join(binDir, 'sandpiper-syphon');
 
 // 3) Assemble dist/ mirroring the packaged bundle layout.
 rmSync(DIST, { recursive: true, force: true });
 mkdirSync(join(DIST, 'MacOS'), { recursive: true });
 mkdirSync(join(DIST, 'Frameworks'), { recursive: true });
-cpSync(binPath, join(DIST, 'MacOS', 'operator-syphon'));
+cpSync(binPath, join(DIST, 'MacOS', 'sandpiper-syphon'));
 run('ditto', [STAGED_FW, join(DIST, 'Frameworks', 'Syphon.framework')]);
 
 console.log(
-    `[syphon-bridge] built ${UNIVERSAL ? 'arm64+x86_64' : process.arch} -> ${join(DIST, 'MacOS', 'operator-syphon')}`,
+    `[syphon-bridge] built ${UNIVERSAL ? 'arm64+x86_64' : process.arch} -> ${join(DIST, 'MacOS', 'sandpiper-syphon')}`,
 );

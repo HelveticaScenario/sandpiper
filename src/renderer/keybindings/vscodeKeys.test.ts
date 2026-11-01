@@ -93,28 +93,28 @@ describe('aliasCommand', () => {
         );
     });
 
-    test('rewrites workbench ids Operator owns as registry commands', () => {
+    test('rewrites workbench ids Sandpiper owns as registry commands', () => {
         expect(aliasCommand('workbench.action.files.save')).toBe(
-            'operator.save',
+            'sandpiper.save',
         );
         expect(aliasCommand('workbench.action.showCommands')).toBe(
-            'operator.showCommandPalette',
+            'sandpiper.showCommandPalette',
         );
         expect(aliasCommand('workbench.action.files.openFolder')).toBe(
-            'operator.openWorkspace',
+            'sandpiper.openWorkspace',
         );
     });
 
-    test('is identity for shared editor ids, operator-native ids, and unknown ids', () => {
+    test('is identity for shared editor ids, sandpiper-native ids, and unknown ids', () => {
         // Shared with VS Code verbatim — dispatches to Monaco as-is.
         expect(aliasCommand('editor.action.rename')).toBe(
             'editor.action.rename',
         );
-        // Operator-native — already in dispatch form.
-        expect(aliasCommand('operator.updatePatch')).toBe(
-            'operator.updatePatch',
+        // Sandpiper-native — already in dispatch form.
+        expect(aliasCommand('sandpiper.updatePatch')).toBe(
+            'sandpiper.updatePatch',
         );
-        // Feature-absent in Operator — passes through untouched.
+        // Feature-absent in Sandpiper — passes through untouched.
         expect(aliasCommand('workbench.action.showAllSymbols')).toBe(
             'workbench.action.showAllSymbols',
         );
@@ -129,31 +129,31 @@ describe('authoringId', () => {
         expect(authoringId('editor.action.quickOutline')).toBe(
             'workbench.action.gotoSymbol',
         );
-        expect(authoringId('operator.save')).toBe(
+        expect(authoringId('sandpiper.save')).toBe(
             'workbench.action.files.save',
         );
-        expect(authoringId('operator.showCommandPalette')).toBe(
+        expect(authoringId('sandpiper.showCommandPalette')).toBe(
             'workbench.action.showCommands',
         );
     });
 
     test('picks the first-listed VS Code id when several alias to one command', () => {
         // openKeybindings: the File (JSON) variant is listed first.
-        expect(authoringId('operator.openKeybindings')).toBe(
+        expect(authoringId('sandpiper.openKeybindings')).toBe(
             'workbench.action.openGlobalKeybindingsFile',
         );
         // openWorkspace: the Open Folder id is listed first.
-        expect(authoringId('operator.openWorkspace')).toBe(
+        expect(authoringId('sandpiper.openWorkspace')).toBe(
             'workbench.action.files.openFolder',
         );
     });
 
-    test('is identity for shared editor ids and operator-native ids', () => {
+    test('is identity for shared editor ids and sandpiper-native ids', () => {
         expect(authoringId('editor.action.rename')).toBe(
             'editor.action.rename',
         );
-        expect(authoringId('operator.updatePatch')).toBe(
-            'operator.updatePatch',
+        expect(authoringId('sandpiper.updatePatch')).toBe(
+            'sandpiper.updatePatch',
         );
     });
 
@@ -161,9 +161,9 @@ describe('authoringId', () => {
         for (const dispatchId of [
             'editor.action.gotoLine',
             'editor.action.quickOutline',
-            'operator.save',
-            'operator.openWorkspace',
-            'operator.openKeybindings',
+            'sandpiper.save',
+            'sandpiper.openWorkspace',
+            'sandpiper.openKeybindings',
         ]) {
             expect(aliasCommand(authoringId(dispatchId))).toBe(dispatchId);
         }
@@ -172,7 +172,7 @@ describe('authoringId', () => {
 
 describe('normalizeOverride', () => {
     test('a plain entry becomes a bind with translated key', () => {
-        // showAllSymbols has no Operator equivalent, so the id passes through.
+        // showAllSymbols has no Sandpiper equivalent, so the id passes through.
         expect(
             normalizeOverride(
                 { key: 'cmd+e', command: 'workbench.action.showAllSymbols' },
@@ -194,7 +194,7 @@ describe('normalizeOverride', () => {
         ).toEqual({
             type: 'bind',
             key: 'Shift+Meta+s',
-            command: 'operator.save',
+            command: 'sandpiper.save',
         });
     });
 

@@ -33,8 +33,8 @@ execFileSync(
 // main-process restart.
 const RESTART_SOCKET =
     process.platform === 'win32'
-        ? `\\\\.\\pipe\\operator-dev-restart-${process.pid}`
-        : join(tmpdir(), `operator-dev-restart-${process.pid}.sock`);
+        ? `\\\\.\\pipe\\sandpiper-dev-restart-${process.pid}`
+        : join(tmpdir(), `sandpiper-dev-restart-${process.pid}.sock`);
 process.env.DEV_RESTART_SOCKET = RESTART_SOCKET;
 
 const child = spawn(process.execPath, [FORGE_CLI, 'start'], {
