@@ -14,8 +14,8 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-/// Longest audio track that is decoded into memory, in seconds.
-pub const MAX_DURATION_SECONDS: u64 = 600;
+/// Longest media audio track that is decoded into memory, in seconds.
+pub const MAX_MEDIA_DURATION_SECONDS: u64 = 600;
 
 /// The audio codecs that decode, as named in errors.
 const SUPPORTED_CODECS: &str = "AAC, ALAC, FLAC, MP3, Vorbis and PCM";
@@ -28,9 +28,14 @@ pub struct DecodedAudio {
 /// Decodes the first audio track of `path`. `Ok(None)` means the file has no
 /// audio track. Encoder delay is trimmed when the container records it, so the
 /// first sample lines up with the first video frame. At most
-/// [`PORT_MAX_CHANNELS`] channels are kept.
-pub fn decode_audio(path: &Path) -> Result<Option<DecodedAudio>, String> {
+/// [`PORT_MAX_CHANNELS`] channels are kept. A track longer than
+/// `max_duration_seconds` is an error; `None` decodes any length.
+pub fn decode_audio(
+    path: &Path,
+    max_duration_seconds: Option<u64>,
+) -> Result<Option<DecodedAudio>, String> {
     let file = File::open(path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    let file_len = file.metadata().map_or(0, |m| m.len());
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
     if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
@@ -65,6 +70,7 @@ pub fn decode_audio(path: &Path) -> Result<Option<DecodedAudio>, String> {
     }
     let container_rate = track.codec_params.sample_rate.unwrap_or(0);
     let container_frames = track.codec_params.n_frames;
+    let coded_bits_per_sample = track.codec_params.bits_per_coded_sample;
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| {
@@ -118,8 +124,17 @@ pub fn decode_audio(path: &Path) -> Result<Option<DecodedAudio>, String> {
             if sample_rate == 0 {
                 return Ok(None);
             }
-            max_frames = MAX_DURATION_SECONDS * u64::from(sample_rate);
-            let reserve = container_frames.unwrap_or(0).min(max_frames) as usize;
+            max_frames =
+                max_duration_seconds.map_or(u64::MAX, |seconds| seconds * u64::from(sample_rate));
+            // The container's frame count is untrusted, so the file size
+            // bounds the reservation: every sample takes at least its coded
+            // width, or one bit when the codec has no fixed width.
+            let coded_bits = u64::from(coded_bits_per_sample.unwrap_or(1).max(1));
+            let reserve = container_frames
+                .unwrap_or(0)
+                .min(max_frames)
+                .min(file_len.saturating_mul(8) / (coded_bits * stride as u64))
+                as usize;
             channels = (0..stride.min(PORT_MAX_CHANNELS))
                 .map(|_| Vec::with_capacity(reserve))
                 .collect();
@@ -135,7 +150,7 @@ pub fn decode_audio(path: &Path) -> Result<Option<DecodedAudio>, String> {
             return Err(format!(
                 "the audio of {} is longer than {} minutes",
                 path.display(),
-                MAX_DURATION_SECONDS / 60
+                max_frames / u64::from(sample_rate) / 60
             ));
         }
     }
@@ -164,6 +179,10 @@ fn append_frames(channels: &mut [Vec<f32>], interleaved: &[f32], stride: usize) 
 mod tests {
     use super::*;
 
+    fn decode_audio_capped(path: &Path) -> Result<Option<DecodedAudio>, String> {
+        decode_audio(path, Some(MAX_MEDIA_DURATION_SECONDS))
+    }
+
     fn fixture(name: &str) -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures")
@@ -172,7 +191,7 @@ mod tests {
 
     #[test]
     fn decodes_the_audio_track_of_an_mp4() {
-        let audio = decode_audio(&fixture("av.mp4")).unwrap().unwrap();
+        let audio = decode_audio_capped(&fixture("av.mp4")).unwrap().unwrap();
         assert_eq!(audio.sample_rate, 44_100);
         assert_eq!(audio.channels.len(), 2);
         // Half a second of audio, give or take the codec's frame granularity.
@@ -183,7 +202,7 @@ mod tests {
 
     #[test]
     fn decoded_audio_carries_the_tone() {
-        let audio = decode_audio(&fixture("av.mp4")).unwrap().unwrap();
+        let audio = decode_audio_capped(&fixture("av.mp4")).unwrap().unwrap();
         let peak = audio.channels[0]
             .iter()
             .fold(0.0f32, |peak, s| peak.max(s.abs()));
@@ -192,7 +211,11 @@ mod tests {
 
     #[test]
     fn a_video_without_sound_has_no_audio() {
-        assert!(decode_audio(&fixture("silent.mp4")).unwrap().is_none());
+        assert!(
+            decode_audio_capped(&fixture("silent.mp4"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -213,19 +236,19 @@ mod tests {
 
     #[test]
     fn opus_audio_is_an_error_that_names_the_supported_codecs() {
-        let error = decode_audio(&fixture("opus.webm")).err().unwrap();
+        let error = decode_audio_capped(&fixture("opus.webm")).err().unwrap();
         assert!(error.contains("Opus audio is not supported"), "{error}");
         assert!(error.contains(SUPPORTED_CODECS), "{error}");
     }
 
     #[test]
     fn a_missing_file_is_an_error() {
-        assert!(decode_audio(&fixture("absent.mp4")).is_err());
+        assert!(decode_audio_capped(&fixture("absent.mp4")).is_err());
     }
 
     #[test]
     fn a_file_that_is_not_media_is_an_error() {
-        let error = decode_audio(&fixture("../../Cargo.toml"));
+        let error = decode_audio_capped(&fixture("../../Cargo.toml"));
         assert!(error.is_err());
     }
 }
