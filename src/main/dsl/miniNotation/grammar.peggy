@@ -1,5 +1,5 @@
 /*
- * Mini notation grammar for the Sandpiper DSL.
+ * Mini notation grammar for the Shoreline DSL.
  *
  * Adapted structurally from strudel's packages/mini/krill.pegjs:
  *   Copyright (C) 2022 Strudel contributors

@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <!--
-    Least-privilege entitlements for the headless sandpiper-syphon helper and the
+    Least-privilege entitlements for the headless shoreline-syphon helper and the
     Syphon framework it links. The helper only captures a window via
     ScreenCaptureKit (a TCC runtime grant, not an entitlement) and publishes
     frames over Syphon (Mach/IOSurface, no network), so it needs none of the

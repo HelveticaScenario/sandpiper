@@ -3,11 +3,11 @@ import CoreGraphics
 import Foundation
 import Metal
 
-// sandpiper-syphon — headless ScreenCaptureKit -> Syphon bridge.
+// shoreline-syphon — headless ScreenCaptureKit -> Syphon bridge.
 //
-// Usage:  sandpiper-syphon <cgWindowID> [serverName] [fps]
+// Usage:  shoreline-syphon <cgWindowID> [serverName] [fps]
 //
-// Launched by Sandpiper's main process with the target window's CGWindowID
+// Launched by Shoreline's main process with the target window's CGWindowID
 // (parsed from BrowserWindow.getMediaSourceId()). Captures that one window and
 // republishes it as a Syphon source. Prints `STATUS=<token>` lines on stdout for
 // the parent to react to, and human logs on stderr.
@@ -30,7 +30,7 @@ struct Args {
 func parseArgs() -> Args? {
     let argv = CommandLine.arguments
     guard argv.count >= 2, let windowID = UInt32(argv[1]) else { return nil }
-    let serverName = argv.count >= 3 ? argv[2] : "Sandpiper"
+    let serverName = argv.count >= 3 ? argv[2] : "Shoreline"
     let fps = argv.count >= 4 ? (Int32(argv[3]) ?? 60) : 60
     return Args(windowID: windowID, serverName: serverName, fps: max(1, min(fps, 120)))
 }
@@ -120,7 +120,7 @@ final class BridgeRunner: @unchecked Sendable {
         }
     }
 
-    // Sandpiper signals us on quit (SIGTERM) / toggle-off. Handlers run on the
+    // Shoreline signals us on quit (SIGTERM) / toggle-off. Handlers run on the
     // main queue, which the run loop drains.
     private func installSignalHandlers() {
         for sig in [SIGTERM, SIGINT] {
@@ -136,7 +136,7 @@ final class BridgeRunner: @unchecked Sendable {
     }
 
     // On macOS an orphaned child is reparented to launchd (pid 1) with no signal,
-    // so poll getppid() and tear down if Sandpiper is gone. On the main queue so it
+    // so poll getppid() and tear down if Shoreline is gone. On the main queue so it
     // serializes with the signal handlers over `isShuttingDown`.
     private func installParentWatchdog() {
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -155,7 +155,7 @@ final class BridgeRunner: @unchecked Sendable {
 // MARK: - entry
 
 guard let args = parseArgs() else {
-    log("usage: sandpiper-syphon <cgWindowID> [serverName] [fps]")
+    log("usage: shoreline-syphon <cgWindowID> [serverName] [fps]")
     exit(64)  // EX_USAGE
 }
 
@@ -165,9 +165,9 @@ guard let device = MTLCreateSystemDefaultDevice() else {
 }
 
 // ScreenCaptureKit always requires the Screen Recording grant — even for our own
-// app's window. Spawned as a plain child of Sandpiper, the grant is attributed to
-// the responsible process (Sandpiper.app), so the user grants "Sandpiper" once.
-// The grant only takes effect on a fresh launch, so request it and exit; Sandpiper
+// app's window. Spawned as a plain child of Shoreline, the grant is attributed to
+// the responsible process (Shoreline.app), so the user grants "Shoreline" once.
+// The grant only takes effect on a fresh launch, so request it and exit; Shoreline
 // relaunches us after the user grants.
 if !CGPreflightScreenCaptureAccess() {
     log("Screen Recording permission not granted; requesting…")

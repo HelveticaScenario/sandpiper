@@ -27,7 +27,7 @@ function plainText(parts: readonly SymbolDisplayPart[] | undefined): string {
     return parts?.map((p) => p.text).join('') ?? '';
 }
 
-const OPEN_LINK_COMMAND = 'sandpiper.openJsDocLink';
+const OPEN_LINK_COMMAND = 'shoreline.openJsDocLink';
 
 /** `isTrusted` scoped to the link command, so doc text cannot run others. */
 const LINK_TRUST = { enabledCommands: [OPEN_LINK_COMMAND] };

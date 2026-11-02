@@ -1,9 +1,9 @@
 ---
 name: verify
-description: Launch and drive the Sandpiper Electron app for runtime verification of renderer/editor changes — build handles, single-instance workaround, Playwright driving recipe.
+description: Launch and drive the Shoreline Electron app for runtime verification of renderer/editor changes — build handles, single-instance workaround, Playwright driving recipe.
 ---
 
-# Verifying Sandpiper at runtime
+# Verifying Shoreline at runtime
 
 The app is Electron + Vite (`@electron-forge/plugin-vite`). The built entry is `.vite/build/main.js` (CJS), produced by `electron-forge start`; `e2e/fixtures.ts` launches the same entry. In dev builds it has a Vite dev-server URL baked in (grep `http://localhost:` in `.vite/build/main.js`).
 

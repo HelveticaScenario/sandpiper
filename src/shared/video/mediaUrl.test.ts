@@ -22,26 +22,26 @@ describe('mediaUrl', () => {
 
     it('escapes each segment but keeps the separators', () => {
         expect(mediaUrl('a b/c d.png')).toBe(
-            'sandpiper-media://workspace/a%20b/c%20d.png',
+            'shoreline-media://workspace/a%20b/c%20d.png',
         );
     });
 
     it('rejects a URL of another scheme or host', () => {
         expect(parseMediaUrl('https://workspace/a.png')).toBeNull();
-        expect(parseMediaUrl('sandpiper-media://elsewhere/a.png')).toBeNull();
+        expect(parseMediaUrl('shoreline-media://elsewhere/a.png')).toBeNull();
         expect(parseMediaUrl('file:///etc/passwd')).toBeNull();
         expect(parseMediaUrl('not a url')).toBeNull();
     });
 
     it('rejects broken escapes', () => {
         expect(
-            parseMediaUrl('sandpiper-media://workspace/%E0%A4%A.png'),
+            parseMediaUrl('shoreline-media://workspace/%E0%A4%A.png'),
         ).toBeNull();
     });
 
     it('has parent segments collapsed by the URL parser, even when escaped', () => {
         expect(
-            parseMediaUrl('sandpiper-media://workspace/a/%2e%2e/b.png'),
+            parseMediaUrl('shoreline-media://workspace/a/%2e%2e/b.png'),
         ).toBe('b.png');
         expect(parseMediaUrl(mediaUrl('../../x.png'))).toBe('x.png');
     });
@@ -71,11 +71,11 @@ describe('mediaUrl', () => {
             expect(parseRemoteMediaUrl('https://cdn.example.com/a')).toBeNull();
             expect(
                 parseRemoteMediaUrl(
-                    `sandpiper-media://remote/${encodeURIComponent('file:///etc/passwd')}`,
+                    `shoreline-media://remote/${encodeURIComponent('file:///etc/passwd')}`,
                 ),
             ).toBeNull();
             expect(
-                parseRemoteMediaUrl('sandpiper-media://remote/%E0%A4%A'),
+                parseRemoteMediaUrl('shoreline-media://remote/%E0%A4%A'),
             ).toBeNull();
         });
 

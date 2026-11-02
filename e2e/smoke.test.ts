@@ -72,7 +72,7 @@ test.describe('electron main process', () => {
         expect(appPath.length).toBeGreaterThan(0);
     });
 
-    test('app name is Sandpiper', async ({ electronApp }) => {
+    test('app name is Shoreline', async ({ electronApp }) => {
         const name = await electronApp.evaluate(async ({ app }) => {
             return app.getName();
         });

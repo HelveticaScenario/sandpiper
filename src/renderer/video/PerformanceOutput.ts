@@ -117,7 +117,7 @@ export class PerformanceOutput {
         );
         if (child === null) return;
         const { document } = child;
-        document.title = 'Sandpiper Performance';
+        document.title = 'Shoreline Performance';
         document.body.style.cssText =
             'margin:0;background:#000;overflow:hidden';
         const canvas = document.createElement('canvas');

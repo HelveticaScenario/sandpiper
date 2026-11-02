@@ -2,7 +2,7 @@
 // Runs `napi build` for crates/modular, forwarding all arguments.
 //
 // Windows locks a DLL while it is loaded, so a running dev instance's
-// `sandpiper.*.node` cannot be overwritten by napi's final copy, but it can be
+// `shoreline.*.node` cannot be overwritten by napi's final copy, but it can be
 // renamed. The addon is moved aside for the build and moved back if the build
 // produces no replacement, so a failed build never leaves the checkout without
 // an addon. Set-aside copies are deleted once no process has them loaded.
@@ -21,9 +21,9 @@ const crateDir = join(
 const STALE_MARKER = '.stale-';
 
 const isAddon = (name) =>
-    name.startsWith('sandpiper.') && name.endsWith('.node');
+    name.startsWith('shoreline.') && name.endsWith('.node');
 const isSetAside = (name) =>
-    name.startsWith('sandpiper.') && name.includes(`.node${STALE_MARKER}`);
+    name.startsWith('shoreline.') && name.includes(`.node${STALE_MARKER}`);
 
 function removeSetAsideAddons() {
     for (const name of readdirSync(crateDir).filter(isSetAside)) {

@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>dev.danlewis.sandpiper.syphon-bridge</string>
+    <string>dev.danlewis.shoreline.syphon-bridge</string>
     <key>CFBundleName</key>
-    <string>SandpiperSyphonBridge</string>
+    <string>ShorelineSyphonBridge</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0.0</string>
     <key>CFBundleVersion</key>

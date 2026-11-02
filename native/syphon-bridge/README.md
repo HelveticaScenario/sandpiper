@@ -1,9 +1,9 @@
-# sandpiper-syphon
+# shoreline-syphon
 
-A headless macOS companion that captures the Sandpiper window with
+A headless macOS companion that captures the Shoreline window with
 **ScreenCaptureKit** and republishes it as a **Syphon** source, so the live
 patch view can be pulled into Resolume, VDMX, MadMapper, TouchDesigner, Isadora,
-etc. Sandpiper launches and stops it from the **View → Toggle Syphon Output**
+etc. Shoreline launches and stops it from the **View → Toggle Syphon Output**
 menu item.
 
 Requires **macOS 14+** (ScreenCaptureKit window capture + the helper's deployment
@@ -12,22 +12,22 @@ helper that can't launch.
 
 ## How it works
 
-1. Sandpiper's main process reads the window's `CGWindowID` from
+1. Shoreline's main process reads the window's `CGWindowID` from
    `BrowserWindow.getMediaSourceId()` and spawns this helper with
-   `sandpiper-syphon <cgWindowID> <serverName> <fps>`.
+   `shoreline-syphon <cgWindowID> <serverName> <fps>`.
 2. The helper finds that window via `SCShareableContent`, captures it with an
    `SCStream` (`SCContentFilter(desktopIndependentWindow:)`), and converts each
    IOSurface-backed frame to an `MTLTexture` zero-copy via `CVMetalTextureCache`.
 3. It publishes the texture through `SyphonMetalServer` under the name
-   `Sandpiper`.
+   `Shoreline`.
 
-The helper is spawned as a plain child of Sandpiper, so macOS attributes the
-**Screen Recording** permission to the responsible process (Sandpiper) — the user
-grants "Sandpiper" once. The helper exits with code 2 the first time if the grant
-is missing (after triggering the prompt); Sandpiper surfaces a dialog and the
+The helper is spawned as a plain child of Shoreline, so macOS attributes the
+**Screen Recording** permission to the responsible process (Shoreline) — the user
+grants "Shoreline" once. The helper exits with code 2 the first time if the grant
+is missing (after triggering the prompt); Shoreline surfaces a dialog and the
 user re-enables the menu item once granted.
 
-It self-terminates if Sandpiper dies (it polls `getppid()`), and Sandpiper also
+It self-terminates if Shoreline dies (it polls `getppid()`), and Shoreline also
 signals it on quit.
 
 ## Layout
@@ -36,7 +36,7 @@ signals it on quit.
 Package.swift                      SwiftPM executable; links ScreenCaptureKit/Metal
                                    + vendored Syphon via -F/-framework + @rpath
 Info.plist                         CFBundleIdentifier + LSUIElement (no Dock icon)
-Sources/sandpiper-syphon/
+Sources/shoreline-syphon/
   main.swift                       arg parsing, permission flow, lifecycle, run loop
   WindowCapture.swift              ScreenCaptureKit -> zero-copy MTLTexture
   SyphonPublisher.swift            SyphonMetalServer wrapper
@@ -52,7 +52,7 @@ yarn build-syphon-bridge          # from the repo root
 ```
 
 This builds Syphon.framework (cached per-arch after the first run), compiles the
-helper, and stages `dist/MacOS/sandpiper-syphon` + `dist/Frameworks/Syphon.framework`
+helper, and stages `dist/MacOS/shoreline-syphon` + `dist/Frameworks/Syphon.framework`
 mirroring the packaged bundle layout. It also runs automatically as part of
 `yarn start` (soft, host-arch), `yarn package`, `yarn make`, and `yarn forge-publish`.
 
@@ -86,7 +86,7 @@ workflow installs the Metal Toolchain before building.
 ## Packaging & signing
 
 `forge.config.ts`'s `packageAfterCopy` hook stages the helper into
-`Contents/MacOS/sandpiper-syphon` and Syphon.framework into `Contents/Frameworks/`,
+`Contents/MacOS/shoreline-syphon` and Syphon.framework into `Contents/Frameworks/`,
 then asserts via `lipo` that the helper covers every arch the app ships (so a
 single-arch helper can't slip into a universal build). `@electron/osx-sign` then
 signs both inside-out with the app's Developer ID under the hardened runtime

@@ -7,7 +7,7 @@
 //! (Copyright 2018-2025, various authors), released under the GNU General Public
 //! License version 3 or later; source at
 //! <https://github.com/surge-synthesizer/sst-waveshapers>. This port is a
-//! derivative work under that license, compatible with Sandpiper's AGPL-3.0.
+//! derivative work under that license, compatible with Shoreline's AGPL-3.0.
 
 use std::collections::HashMap;
 

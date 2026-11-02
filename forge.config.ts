@@ -26,13 +26,13 @@ const config: ForgeConfig = {
             //   - Linux:   embedded in the `.node`, nothing extra to unpack.
             unpack: '**/*.{node,node.pdb,dSYM,dSYM/**}',
         },
-        executableName: 'Sandpiper',
+        executableName: 'Shoreline',
         extendInfo: {
             NSLocalNetworkUsageDescription:
-                'Sandpiper uses the local network to sync tempo with other music apps via Ableton Link.',
+                'Shoreline uses the local network to sync tempo with other music apps via Ableton Link.',
             NSBonjourServices: ['_SessionStatus._tcp'],
             NSCameraUsageDescription:
-                'Sandpiper shows the camera in video patches that use $v.camera.',
+                'Shoreline shows the camera in video patches that use $v.camera.',
         },
         osxSign: {
             identity: 'Developer ID Application: Daniel Lewis (HA98TTLCR7)',
@@ -49,7 +49,7 @@ const config: ForgeConfig = {
                 // entitlement — so sign them least-privilege under the hardened
                 // runtime instead of inheriting the app's broad set.
                 const isSyphon =
-                    filePath.endsWith('/Resources/sandpiper-syphon') ||
+                    filePath.endsWith('/Resources/shoreline-syphon') ||
                     filePath.includes('/Frameworks/Syphon.framework');
                 const entitlements = isSyphon
                     ? 'native/syphon-bridge/syphon-entitlements.plist'
@@ -148,7 +148,7 @@ const config: ForgeConfig = {
             // Mach-O sitting beside the main executable is treated as bundle code
             // that codesign requires already-signed when it seals the main binary,
             // and @electron/osx-sign signs same-depth files in directory order — so
-            // whenever it reached Sandpiper before sandpiper-syphon the seal failed
+            // whenever it reached Shoreline before shoreline-syphon the seal failed
             // ("code object is not signed at all"), the failure was swallowed by
             // packager's continueOnError, and notarization then rejected the unsigned
             // app. In Resources the helper is sealed as a resource and signed as its
@@ -168,7 +168,7 @@ const config: ForgeConfig = {
                 const helperSrc = path.join(
                     bridgeDist,
                     'MacOS',
-                    'sandpiper-syphon',
+                    'shoreline-syphon',
                 );
                 const frameworkSrc = path.join(
                     bridgeDist,
@@ -184,7 +184,7 @@ const config: ForgeConfig = {
                     const helperDest = path.join(
                         contents,
                         'Resources',
-                        'sandpiper-syphon',
+                        'shoreline-syphon',
                     );
                     execFileSync('ditto', [helperSrc, helperDest]);
                     execFileSync('ditto', [
@@ -195,7 +195,7 @@ const config: ForgeConfig = {
                     // Fail loudly if the helper doesn't cover every arch the app
                     // ships; otherwise the missing slice silently fails to exec on
                     // that arch. The main app binary is still named "Electron" at
-                    // this hook (renamed to Sandpiper later), so derive the target
+                    // this hook (renamed to Shoreline later), so derive the target
                     // archs from the `arch` argument instead of reading it. Fix:
                     // build universal (yarn build-syphon-bridge --require --universal).
                     const requiredArchs =
@@ -220,7 +220,7 @@ const config: ForgeConfig = {
                         );
                     }
                     console.log(
-                        '[forge] staged Syphon companion (sandpiper-syphon + Syphon.framework)',
+                        '[forge] staged Syphon companion (shoreline-syphon + Syphon.framework)',
                     );
                 } else if (process.env.SYPHON_SKIP === '1') {
                     console.warn(
@@ -237,24 +237,24 @@ const config: ForgeConfig = {
     },
     makers: [
         new MakerSquirrel({
-            name: 'Sandpiper',
+            name: 'Shoreline',
         }),
         new MakerZIP({}, ['darwin']),
         new MakerRpm({
             options: {
-                bin: 'Sandpiper',
+                bin: 'Shoreline',
             },
         }),
         new MakerDeb({
             options: {
-                bin: 'Sandpiper',
+                bin: 'Shoreline',
             },
         }),
         // new MakerFlatpak({
         //   // @ts-ignore
         //   options: {
-        //     bin: 'Sandpiper',
-        //     id: 'com.helveticascenario.sandpiper',
+        //     bin: 'Shoreline',
+        //     id: 'com.helveticascenario.shoreline',
         //   },
         // }),
     ],
@@ -262,7 +262,7 @@ const config: ForgeConfig = {
         new PublisherGithub({
             repository: {
                 owner: 'HelveticaScenario',
-                name: 'sandpiper',
+                name: 'shoreline',
             },
             prerelease: false,
             draft: false,

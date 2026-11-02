@@ -20,7 +20,7 @@ if (app.commandLine.hasSwitch(CPU_PROBE_SWITCH)) {
 } else if (ensureCpuSupported()) {
     import('./app').catch((err: unknown) =>
         failStartup(
-            'Sandpiper failed to start',
+            'Shoreline failed to start',
             err instanceof Error ? (err.stack ?? err.message) : String(err),
         ),
     );

@@ -1,12 +1,12 @@
 /**
- * Sandpiper records the app version that last wrote a patch in a metadata block
+ * Shoreline records the app version that last wrote a patch in a metadata block
  * at the top of the file. The block looks like a JSDoc comment whose first tag
- * is `@sandpiper`, followed by `@version <semver>`, e.g. a block holding
- * `@sandpiper` then `@version 0.0.101`.
+ * is `@shoreline`, followed by `@version <semver>`, e.g. a block holding
+ * `@shoreline` then `@version 0.0.101`.
  *
  * The block is written on save and stripped when the patch is loaded into the
  * editor, so it never appears to the user but always travels with the file on
- * disk (and through git, copy, zip, etc.). `@sandpiper` identifies the block as
+ * disk (and through git, copy, zip, etc.). `@shoreline` identifies the block as
  * ours rather than a user's own JSDoc; the closing delimiter terminates it, and
  * the attribute list leaves room for more `@tag value` fields later.
  *
@@ -14,7 +14,7 @@
  * main-process file handlers and the unit tests share the same logic.
  */
 
-/** File extensions that carry the version stamp (Sandpiper patch files). */
+/** File extensions that carry the version stamp (Shoreline patch files). */
 const STAMPABLE_EXTENSIONS = ['.js', '.mjs'];
 
 /**
@@ -34,25 +34,25 @@ export function isStampablePath(filePath: string): boolean {
 }
 
 /**
- * Whether `block` is Sandpiper's metadata block — it carries the `@sandpiper`
+ * Whether `block` is Shoreline's metadata block — it carries the `@shoreline`
  * tag as a standalone token, not merely as a substring inside other text.
  */
-function isSandpiperBlock(block: string): boolean {
-    return /(^|[^\w@])@sandpiper(?![\w-])/.test(block);
+function isShorelineBlock(block: string): boolean {
+    return /(^|[^\w@])@shoreline(?![\w-])/.test(block);
 }
 
 function buildBlock(version: string): string {
-    return ['/**', ' * @sandpiper', ` * @version ${version}`, ' */'].join('\n');
+    return ['/**', ' * @shoreline', ` * @version ${version}`, ' */'].join('\n');
 }
 
 /**
- * Remove a leading Sandpiper metadata block (and the blank line after it) when
- * present. A leading comment without the `@sandpiper` tag — a user's own header
+ * Remove a leading Shoreline metadata block (and the blank line after it) when
+ * present. A leading comment without the `@shoreline` tag — a user's own header
  * — is left untouched, as is a file that was never stamped. Idempotent.
  */
 export function stripPatchVersionStamp(content: string): string {
     const match = LEADING_BLOCK_COMMENT.exec(content);
-    if (!match || !isSandpiperBlock(match[0])) {
+    if (!match || !isShorelineBlock(match[0])) {
         return content;
     }
     return content.slice(match[0].length).replace(TRAILING_SEPARATOR, '');

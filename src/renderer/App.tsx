@@ -136,7 +136,7 @@ function App() {
     const keybindingsPathRef = useRef<string | null>(null);
     const handleFileSaved = useCallback((filePath: string) => {
         if (filePath === keybindingsPathRef.current) {
-            window.dispatchEvent(new Event('sandpiper:keybindings-changed'));
+            window.dispatchEvent(new Event('shoreline:keybindings-changed'));
         }
     }, []);
 
@@ -1801,7 +1801,7 @@ function App() {
         eqController,
     ]);
 
-    // Keep Link phase indicator live while Link is enabled but Sandpiper is stopped.
+    // Keep Link phase indicator live while Link is enabled but Shoreline is stopped.
     // The main tick loop only runs when isClockRunning; this fills the gap so
     // the phase indicator stays animated even before the user presses play.
     useEffect(() => {
@@ -2201,7 +2201,7 @@ function App() {
             getVuOutputs: () => vuOutputsRef.current,
             getEqPanels: () => eqController.snapshot(),
             isClockRunning: () => isClockRunningRef.current,
-            newUntitledFile: () => executeCommand('sandpiper.newFile'),
+            newUntitledFile: () => executeCommand('shoreline.newFile'),
             openEngineHealth: () => setIsEngineHealthOpen(true),
             openModuleProfile: () => setIsModuleProfileOpen(true),
             setEditorValue: (code: string) => editorRef.current?.setValue(code),
@@ -2301,13 +2301,13 @@ function App() {
             .catch(() => {});
     }, []);
 
-    // Register sandpiper.* commands in the global registry. The Electron menu
+    // Register shoreline.* commands in the global registry. The Electron menu
     // IPC dispatchers below, the cmdk palette, the editor context menu, and
     // the tinykeys keymap all dispatch through `executeCommand` — single
     // source of truth for what each command does.
     useEffect(() => {
         registerCommand(
-            'sandpiper.updatePatch',
+            'shoreline.updatePatch',
             () => {
                 handleSubmitRef.current('NextBar');
             },
@@ -2318,7 +2318,7 @@ function App() {
             },
         );
         registerCommand(
-            'sandpiper.updatePatchNextBeat',
+            'shoreline.updatePatchNextBeat',
             () => {
                 handleSubmitRef.current('NextBeat');
             },
@@ -2329,7 +2329,7 @@ function App() {
             },
         );
         registerCommand(
-            'sandpiper.stop',
+            'shoreline.stop',
             () => {
                 handleStopRef.current();
             },
@@ -2340,7 +2340,7 @@ function App() {
             },
         );
         registerCommand(
-            'sandpiper.cancelQueuedUpdate',
+            'shoreline.cancelQueuedUpdate',
             () => {
                 void electronAPI.synthesizer.cancelQueuedUpdate();
             },
@@ -2351,14 +2351,14 @@ function App() {
             },
         );
         registerCommand(
-            'sandpiper.newFile',
+            'shoreline.newFile',
             () => {
                 createUntitledFileRef.current();
             },
             { label: 'New File', category: 'File' },
         );
         registerCommand(
-            'sandpiper.closeBuffer',
+            'shoreline.closeBuffer',
             () => {
                 const id = activeBufferIdRef.current;
                 if (id) {
@@ -2368,28 +2368,28 @@ function App() {
             { label: 'Close Buffer', category: 'File' },
         );
         registerCommand(
-            'sandpiper.save',
+            'shoreline.save',
             () => {
                 handleSaveFileRef.current();
             },
             { label: 'Save', category: 'File' },
         );
         registerCommand(
-            'sandpiper.openWorkspace',
+            'shoreline.openWorkspace',
             () => {
                 handleOpenWorkspaceRef.current();
             },
             { label: 'Open Workspace…', category: 'File' },
         );
         registerCommand(
-            'sandpiper.openSettings',
+            'shoreline.openSettings',
             () => {
                 setIsSettingsOpen(true);
             },
             { label: 'Open Settings', category: 'Preferences' },
         );
         registerCommand(
-            'sandpiper.showCommandPalette',
+            'shoreline.showCommandPalette',
             () => {
                 setIsPaletteOpen(true);
             },
@@ -2400,7 +2400,7 @@ function App() {
             },
         );
         registerCommand(
-            'sandpiper.openKeybindings',
+            'shoreline.openKeybindings',
             () => {
                 void handleOpenKeybindingsRef.current();
             },
@@ -2410,7 +2410,7 @@ function App() {
             },
         );
         registerCommand(
-            'sandpiper.toggleVuMeters',
+            'shoreline.toggleVuMeters',
             () => {
                 setIsVuPanelVisible((visible) => {
                     void electronAPI.config.write({
@@ -2422,14 +2422,14 @@ function App() {
             { label: 'Toggle VU Meters', category: 'View' },
         );
         registerCommand(
-            'sandpiper.togglePerformanceWindow',
+            'shoreline.togglePerformanceWindow',
             () => {
                 performanceOutput.toggle();
             },
             { label: 'Toggle Performance Window', category: 'View' },
         );
         registerCommand(
-            'sandpiper.togglePerformanceCode',
+            'shoreline.togglePerformanceCode',
             () => {
                 void electronAPI.config.read().then((config) =>
                     electronAPI.config.write({
@@ -2443,20 +2443,20 @@ function App() {
         );
 
         return () => {
-            unregisterCommand('sandpiper.togglePerformanceWindow');
-            unregisterCommand('sandpiper.togglePerformanceCode');
-            unregisterCommand('sandpiper.toggleVuMeters');
-            unregisterCommand('sandpiper.updatePatch');
-            unregisterCommand('sandpiper.updatePatchNextBeat');
-            unregisterCommand('sandpiper.stop');
-            unregisterCommand('sandpiper.cancelQueuedUpdate');
-            unregisterCommand('sandpiper.newFile');
-            unregisterCommand('sandpiper.closeBuffer');
-            unregisterCommand('sandpiper.save');
-            unregisterCommand('sandpiper.openWorkspace');
-            unregisterCommand('sandpiper.openSettings');
-            unregisterCommand('sandpiper.showCommandPalette');
-            unregisterCommand('sandpiper.openKeybindings');
+            unregisterCommand('shoreline.togglePerformanceWindow');
+            unregisterCommand('shoreline.togglePerformanceCode');
+            unregisterCommand('shoreline.toggleVuMeters');
+            unregisterCommand('shoreline.updatePatch');
+            unregisterCommand('shoreline.updatePatchNextBeat');
+            unregisterCommand('shoreline.stop');
+            unregisterCommand('shoreline.cancelQueuedUpdate');
+            unregisterCommand('shoreline.newFile');
+            unregisterCommand('shoreline.closeBuffer');
+            unregisterCommand('shoreline.save');
+            unregisterCommand('shoreline.openWorkspace');
+            unregisterCommand('shoreline.openSettings');
+            unregisterCommand('shoreline.showCommandPalette');
+            unregisterCommand('shoreline.openKeybindings');
         };
     }, []);
 
@@ -2469,7 +2469,7 @@ function App() {
         void electronAPI.syphon.isSupported().then((supported) => {
             if (!active || !supported) return;
             registerCommand(
-                'sandpiper.toggleSyphon',
+                'shoreline.toggleSyphon',
                 () => {
                     void electronAPI.syphon.toggle();
                 },
@@ -2478,7 +2478,7 @@ function App() {
         });
         return () => {
             active = false;
-            unregisterCommand('sandpiper.toggleSyphon');
+            unregisterCommand('shoreline.toggleSyphon');
         };
     }, []);
 
@@ -2488,32 +2488,32 @@ function App() {
         // toggling it reads render-state isRecording directly, hence this
         // effect's dependency on it.
         const cleanupNewFile = electronAPI.onMenuNewFile(() => {
-            executeCommand('sandpiper.newFile');
+            executeCommand('shoreline.newFile');
         });
         const cleanupSave = electronAPI.onMenuSave(() => {
-            executeCommand('sandpiper.save');
+            executeCommand('shoreline.save');
         });
         const cleanupStop = electronAPI.onMenuStop(() => {
-            executeCommand('sandpiper.stop');
+            executeCommand('shoreline.stop');
         });
         const cleanupCancelQueuedUpdate = electronAPI.onMenuCancelQueuedUpdate(
             () => {
-                executeCommand('sandpiper.cancelQueuedUpdate');
+                executeCommand('shoreline.cancelQueuedUpdate');
             },
         );
         const cleanupUpdate = electronAPI.onMenuUpdatePatch(() => {
-            executeCommand('sandpiper.updatePatch');
+            executeCommand('shoreline.updatePatch');
         });
         const cleanupUpdateNextBeat = electronAPI.onMenuUpdatePatchNextBeat(
             () => {
-                executeCommand('sandpiper.updatePatchNextBeat');
+                executeCommand('shoreline.updatePatchNextBeat');
             },
         );
         const cleanupOpenWorkspace = electronAPI.onMenuOpenWorkspace(() => {
-            executeCommand('sandpiper.openWorkspace');
+            executeCommand('shoreline.openWorkspace');
         });
         const cleanupCloseBuffer = electronAPI.onMenuCloseBuffer(() => {
-            executeCommand('sandpiper.closeBuffer');
+            executeCommand('shoreline.closeBuffer');
         });
         const cleanupToggleRecording = electronAPI.onMenuToggleRecording(() => {
             if (isRecording) {
@@ -2526,16 +2526,16 @@ function App() {
         });
 
         const cleanupToggleVuMeters = electronAPI.onMenuToggleVuMeters(() => {
-            executeCommand('sandpiper.toggleVuMeters');
+            executeCommand('shoreline.toggleVuMeters');
         });
         const cleanupTogglePerformanceWindow =
             electronAPI.onMenuTogglePerformanceWindow(() => {
-                executeCommand('sandpiper.togglePerformanceWindow');
+                executeCommand('shoreline.togglePerformanceWindow');
             });
 
         // Handle opening settings from menu (Cmd+,)
         const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
-            executeCommand('sandpiper.openSettings');
+            executeCommand('shoreline.openSettings');
         });
         const cleanupOpenEngineHealth = electronAPI.onMenuOpenEngineHealth(
             () => {
@@ -2691,7 +2691,7 @@ function App() {
         };
     }, [isRecording]);
 
-    // Install the window-level tinykeys keymap. Runs after the sandpiper.*
+    // Install the window-level tinykeys keymap. Runs after the shoreline.*
     // commands above have been registered (effects fire in declaration order),
     // so dispatch always finds a handler. The loader merges user overrides
     // from `<userData>/keybindings.json` on top of `DEFAULT_KEYMAP`.
@@ -2719,11 +2719,11 @@ function App() {
         install();
         // Re-read and re-install when the user saves keybindings.json.
         const onChanged = () => install();
-        window.addEventListener('sandpiper:keybindings-changed', onChanged);
+        window.addEventListener('shoreline:keybindings-changed', onChanged);
         return () => {
             disposed = true;
             window.removeEventListener(
-                'sandpiper:keybindings-changed',
+                'shoreline:keybindings-changed',
                 onChanged,
             );
             disposer?.();

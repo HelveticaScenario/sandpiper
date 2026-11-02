@@ -8,7 +8,7 @@ const CAMERA_SIZE = { height: { ideal: 1080 }, width: { ideal: 1920 } };
 async function openCamera(device: string | undefined): Promise<MediaStream> {
     if (!(await electronAPI.video.requestCameraAccess())) {
         throw new Error(
-            'camera access is not allowed; allow Sandpiper under System Settings, Privacy & Security, Camera, then restart it',
+            'camera access is not allowed; allow Shoreline under System Settings, Privacy & Security, Camera, then restart it',
         );
     }
     if (device === undefined) {

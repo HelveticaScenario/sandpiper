@@ -45,7 +45,7 @@ const THEMES = [
 export const configSchema = {
     $schema: 'http://json-schema.org/draft-07/schema#',
     additionalProperties: false,
-    description: 'Configuration file for the Sandpiper synthesizer application',
+    description: 'Configuration file for the Shoreline synthesizer application',
     properties: {
         audioConfig: audioConfigSchema,
         codeBackdropOpacity: {
@@ -234,6 +234,6 @@ export const configSchema = {
             type: 'string',
         },
     },
-    title: 'Sandpiper Configuration',
+    title: 'Shoreline Configuration',
     type: 'object',
 };

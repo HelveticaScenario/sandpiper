@@ -25,11 +25,11 @@ const repoRoot = dirname(here);
 const crateDir = join(repoRoot, 'crates', 'modular');
 
 const nodeFile = readdirSync(crateDir).find(
-    (f) => f.startsWith('sandpiper.') && f.endsWith('.node'),
+    (f) => f.startsWith('shoreline.') && f.endsWith('.node'),
 );
 if (!nodeFile) {
     console.warn(
-        `[copy-debuginfo] no sandpiper.*.node in ${crateDir}, skipping`,
+        `[copy-debuginfo] no shoreline.*.node in ${crateDir}, skipping`,
     );
     process.exit(0);
 }

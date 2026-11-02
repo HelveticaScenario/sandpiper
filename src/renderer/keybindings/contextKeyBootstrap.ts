@@ -21,9 +21,9 @@ import { contextKeys, type ContextKeyValue } from './contextKey';
 
 export type Teardown = () => void;
 
-// VS Code names several focus context keys that map onto Sandpiper's single
+// VS Code names several focus context keys that map onto Shoreline's single
 // editor; keep them in lock-step so VS Code-authored `when` clauses gate
-// correctly. `editorFocused` is Sandpiper's own; the rest are VS Code aliases.
+// correctly. `editorFocused` is Shoreline's own; the rest are VS Code aliases.
 // Widget focus spans the editor and its peripheral inputs (find / suggest);
 // `editorTextFocus` is narrower — true only while the main text input holds
 // focus, so it drops to false when, e.g., the find box is focused.
@@ -80,7 +80,7 @@ const JS_TS_PROVIDER_KEYS = [
 
 /**
  * Mirror the editor context keys that VS Code `when` clauses commonly test:
- *   - editorReadonly  — always false (Sandpiper's buffers are editable)
+ *   - editorReadonly  — always false (Shoreline's buffers are editable)
  *   - foldingEnabled  — reflects the editor's `folding` option
  *   - editorLangId    — the active model's language id
  *   - editorHas<X>Provider — true while a js/ts model is active (see above)

@@ -89,7 +89,7 @@ export function runCpuProbe(): void {
  * lives in the temp dir, outside every profile.
  */
 function windowsProbeOutcome(): ProbeOutcome {
-    const cachePath = path.join(os.tmpdir(), 'sandpiper-cpu-probe.json');
+    const cachePath = path.join(os.tmpdir(), 'shoreline-cpu-probe.json');
     const key = `${app.getVersion()}|${os.cpus()[0]?.model ?? ''}`;
     try {
         const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
@@ -157,7 +157,7 @@ export function ensureCpuSupported(): boolean {
 
     failStartup(
         'Unsupported processor',
-        `Sandpiper needs a processor with SSE4.2 and POPCNT: Intel Core from 2008 onward, or AMD from 2011 onward.\n\nThis computer's processor (${os.cpus()[0]?.model ?? 'unknown'}) does not support them.`,
+        `Shoreline needs a processor with SSE4.2 and POPCNT: Intel Core from 2008 onward, or AMD from 2011 onward.\n\nThis computer's processor (${os.cpus()[0]?.model ?? 'unknown'}) does not support them.`,
     );
     return false;
 }
