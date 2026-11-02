@@ -70,6 +70,7 @@ pub fn decode_audio(
     }
     let container_rate = track.codec_params.sample_rate.unwrap_or(0);
     let container_frames = track.codec_params.n_frames;
+    let coded_bits_per_sample = track.codec_params.bits_per_coded_sample;
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| {
@@ -125,12 +126,15 @@ pub fn decode_audio(
             }
             max_frames =
                 max_duration_seconds.map_or(u64::MAX, |seconds| seconds * u64::from(sample_rate));
-            // The container's frame count is untrusted; a frame takes at least
-            // a byte per channel, so the file size bounds the reservation.
+            // The container's frame count is untrusted, so the file size
+            // bounds the reservation: every sample takes at least its coded
+            // width, or one bit when the codec has no fixed width.
+            let coded_bits = u64::from(coded_bits_per_sample.unwrap_or(1).max(1));
             let reserve = container_frames
                 .unwrap_or(0)
                 .min(max_frames)
-                .min(file_len / stride as u64) as usize;
+                .min(file_len.saturating_mul(8) / (coded_bits * stride as u64))
+                as usize;
             channels = (0..stride.min(PORT_MAX_CHANNELS))
                 .map(|_| Vec::with_capacity(reserve))
                 .collect();

@@ -2443,8 +2443,8 @@ mod wav_cache_tests {
         result.expect("truncated stereo wav must decode without error");
         let data = &cache.entries["trunc"].data;
         assert_eq!(data.channel_count(), 2);
-        let frames = data.frame_count();
-        assert!(frames > 0 && frames <= 1500, "frames = {frames}");
+        // 3001 interleaved samples hold 1500 whole frames.
+        assert_eq!(data.frame_count(), 1500);
     }
 
     #[test]
