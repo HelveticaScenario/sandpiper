@@ -162,7 +162,7 @@ mod tests {
 
     fn temp_wav_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "sandpiper_recording_test_{tag}_{}.wav",
+            "shoreline_recording_test_{tag}_{}.wav",
             std::process::id()
         ))
     }

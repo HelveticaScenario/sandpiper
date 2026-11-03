@@ -9,12 +9,12 @@ let frameworks = "\(root)/Frameworks"
 let infoPlist = "\(root)/Info.plist"
 
 let package = Package(
-    name: "sandpiper-syphon",
+    name: "shoreline-syphon",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "sandpiper-syphon",
-            path: "Sources/sandpiper-syphon",
+            name: "shoreline-syphon",
+            path: "Sources/shoreline-syphon",
             swiftSettings: [
                 // Framework search path for `import Syphon`.
                 .unsafeFlags(["-F", frameworks])

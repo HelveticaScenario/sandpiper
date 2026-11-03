@@ -1,13 +1,13 @@
 /**
  * Translate VS Code `keybindings.json` key syntax into tinykeys binding
- * strings, and normalize a user keymap (VS Code or Sandpiper style) into the
+ * strings, and normalize a user keymap (VS Code or Shoreline style) into the
  * internal form the loader installs.
  *
  * VS Code and tinykeys differ in three ways we bridge here:
  *
  *  - Modifiers: VS Code writes `cmd` / `ctrl` / `alt` / `shift` (and only on
  *    the platform they exist); tinykeys matches `Meta` / `Control` / `Alt` /
- *    `Shift` via `KeyboardEvent.getModifierState`. `$mod` (Sandpiper defaults)
+ *    `Shift` via `KeyboardEvent.getModifierState`. `$mod` (Shoreline defaults)
  *    resolves to the platform's primary modifier, same as tinykeys.
  *  - Keys: most names match case-insensitively against `event.key`
  *    (`enter`, `f1`, `home`), but the arrow keys must be spelled `ArrowUp`
@@ -177,7 +177,7 @@ function translatePress(press: string, platform: Platform): string | null {
 }
 
 /**
- * Translate a full VS Code / Sandpiper key string (possibly a chord) into a
+ * Translate a full VS Code / Shoreline key string (possibly a chord) into a
  * tinykeys binding string. Returns null if any press is unparseable.
  */
 export function toTinykeys(key: string, platform: Platform): string | null {
@@ -215,20 +215,20 @@ export type NormalizedEntry =
     | ({ type: 'remove' } & NormalizedRemoval);
 
 /**
- * VS Code command id → Sandpiper dispatch id.
+ * VS Code command id → Shoreline dispatch id.
  *
- * Sandpiper authors its default keymap and accepts user keymaps in VS Code's
+ * Shoreline authors its default keymap and accepts user keymaps in VS Code's
  * command vocabulary, so a VS Code `keybindings.json` drops in. Dispatch,
- * however, resolves only a `sandpiper.*` registry command or a Monaco editor
+ * however, resolves only a `shoreline.*` registry command or a Monaco editor
  * action / core command (`dispatch.ts`). This table rewrites the handful of
- * actions VS Code names differently from their Sandpiper/Monaco dispatch id;
+ * actions VS Code names differently from their Shoreline/Monaco dispatch id;
  * every other id — the shared `editor.action.*` set, core commands, and
- * Sandpiper-native `sandpiper.*` ids — has no entry and passes through unchanged.
+ * Shoreline-native `shoreline.*` ids — has no entry and passes through unchanged.
  *
  * Two kinds of divergence are bridged:
  *   - Workbench quick-inputs that Monaco's standalone editor re-registers under
  *     an `editor.action.*` id (Go to Line, Go to Symbol).
- *   - App-level actions Sandpiper implements as `sandpiper.*` registry commands
+ *   - App-level actions Shoreline implements as `shoreline.*` registry commands
  *     (save, new file, close, settings, command palette, keyboard shortcuts,
  *     open folder).
  */
@@ -237,27 +237,27 @@ export const COMMAND_ALIASES: Readonly<Record<string, string>> = {
     // actions, so the VS Code id never resolves without the rewrite.
     'workbench.action.gotoLine': 'editor.action.gotoLine',
     'workbench.action.gotoSymbol': 'editor.action.quickOutline',
-    // App-level commands Sandpiper owns in its registry.
-    'workbench.action.files.save': 'sandpiper.save',
-    'workbench.action.files.newUntitledFile': 'sandpiper.newFile',
-    'workbench.action.closeActiveEditor': 'sandpiper.closeBuffer',
-    'workbench.action.showCommands': 'sandpiper.showCommandPalette',
-    'workbench.action.openSettings': 'sandpiper.openSettings',
-    // File (JSON) variant first — it matches Sandpiper's "Open Keyboard
+    // App-level commands Shoreline owns in its registry.
+    'workbench.action.files.save': 'shoreline.save',
+    'workbench.action.files.newUntitledFile': 'shoreline.newFile',
+    'workbench.action.closeActiveEditor': 'shoreline.closeBuffer',
+    'workbench.action.showCommands': 'shoreline.showCommandPalette',
+    'workbench.action.openSettings': 'shoreline.openSettings',
+    // File (JSON) variant first — it matches Shoreline's "Open Keyboard
     // Shortcuts (JSON)" behaviour and is the id autocomplete offers; the UI
     // variant (the common Cmd+K Cmd+S default) still aliases on import.
-    'workbench.action.openGlobalKeybindingsFile': 'sandpiper.openKeybindings',
-    'workbench.action.openGlobalKeybindings': 'sandpiper.openKeybindings',
-    // Sandpiper's "open" is a folder/workspace picker (main.ts FS_SELECT_WORKSPACE),
+    'workbench.action.openGlobalKeybindingsFile': 'shoreline.openKeybindings',
+    'workbench.action.openGlobalKeybindings': 'shoreline.openKeybindings',
+    // Shoreline's "open" is a folder/workspace picker (main.ts FS_SELECT_WORKSPACE),
     // matching VS Code's Open Folder; the mac "Open…" id maps here too.
-    'workbench.action.files.openFolder': 'sandpiper.openWorkspace',
-    'workbench.action.files.openFileFolder': 'sandpiper.openWorkspace',
+    'workbench.action.files.openFolder': 'shoreline.openWorkspace',
+    'workbench.action.files.openFileFolder': 'shoreline.openWorkspace',
 };
 
 /**
- * Resolve an authored command id (VS Code or Sandpiper vocabulary) to the id
+ * Resolve an authored command id (VS Code or Shoreline vocabulary) to the id
  * dispatch understands. Identity for any id without an alias — including ids
- * that are already in Sandpiper/Monaco dispatch form.
+ * that are already in Shoreline/Monaco dispatch form.
  */
 export function aliasCommand(command: string): string {
     return COMMAND_ALIASES[command] ?? command;
@@ -284,7 +284,7 @@ const DISPATCH_TO_VSCODE = invertAliases();
  * The id a keybindings file should author a command as: the VS Code id when
  * the command has one, else the id unchanged. Inverse of `aliasCommand` — what
  * the keybindings autocomplete offers, so a user writes (and pastes) VS Code's
- * vocabulary instead of Sandpiper's internal dispatch id.
+ * vocabulary instead of Shoreline's internal dispatch id.
  */
 export function authoringId(command: string): string {
     return DISPATCH_TO_VSCODE[command] ?? command;
@@ -294,7 +294,7 @@ export function authoringId(command: string): string {
  * Normalize one raw override into the internal entry form. Returns null when
  * the key cannot be translated (the entry is dropped rather than installed
  * wrong). The command id is aliased to its dispatch form (see `aliasCommand`)
- * so VS Code ids resolve. Removal is signalled by `command: null` (Sandpiper)
+ * so VS Code ids resolve. Removal is signalled by `command: null` (Shoreline)
  * or a `-` prefix (VS Code); the removed id is aliased too, so a `-`-prefixed
  * VS Code id cancels a default authored in the same VS Code vocabulary.
  */

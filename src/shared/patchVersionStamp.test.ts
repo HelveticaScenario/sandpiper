@@ -26,7 +26,7 @@ describe('stampPatchVersionSource', () => {
     it('prepends a metadata block above the patch body', () => {
         const stamped = stampPatchVersionSource(PATCH, '0.0.101');
         expect(stamped).toBe(
-            `/**\n * @sandpiper\n * @version 0.0.101\n */\n\n${PATCH}`,
+            `/**\n * @shoreline\n * @version 0.0.101\n */\n\n${PATCH}`,
         );
     });
 
@@ -47,12 +47,12 @@ describe('stampPatchVersionSource', () => {
         const next = stampPatchVersionSource(old, '0.0.2');
         expect(next).toContain('@version 0.0.2');
         expect(next).not.toContain('@version 0.0.1');
-        expect(next.match(/@sandpiper/g)).toHaveLength(1);
+        expect(next.match(/@shoreline/g)).toHaveLength(1);
     });
 
     it('handles an empty patch', () => {
         const stamped = stampPatchVersionSource('', '0.0.1');
-        expect(stamped).toBe(`/**\n * @sandpiper\n * @version 0.0.1\n */\n`);
+        expect(stamped).toBe(`/**\n * @shoreline\n * @version 0.0.1\n */\n`);
         expect(stripPatchVersionStamp(stamped)).toBe('');
     });
 });
@@ -67,10 +67,10 @@ describe('stripPatchVersionStamp', () => {
         expect(stripPatchVersionStamp(withDoc)).toBe(withDoc);
     });
 
-    it('does not treat @sandpiper inside prose or an email as the block', () => {
-        const prose = `// see @sandpiperX docs\n${PATCH}`;
+    it('does not treat @shoreline inside prose or an email as the block', () => {
+        const prose = `// see @shorelineX docs\n${PATCH}`;
         expect(stripPatchVersionStamp(prose)).toBe(prose);
-        const email = `/* contact me@sandpiper.com */\n${PATCH}`;
+        const email = `/* contact me@shoreline.com */\n${PATCH}`;
         expect(stripPatchVersionStamp(email)).toBe(email);
     });
 
@@ -80,7 +80,7 @@ describe('stripPatchVersionStamp', () => {
     });
 
     it('tolerates a hand-edited block with a single trailing newline', () => {
-        const stamped = `/**\n * @sandpiper\n * @version 0.0.1\n */\n${PATCH}`;
+        const stamped = `/**\n * @shoreline\n * @version 0.0.1\n */\n${PATCH}`;
         expect(stripPatchVersionStamp(stamped)).toBe(PATCH);
     });
 

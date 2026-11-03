@@ -2,7 +2,7 @@
  * Universal command dispatch shared by the keymap and the editor context
  * menu. A command id resolves in one of two ways:
  *
- *  1. An Sandpiper registry command (`sandpiper.*`) → run via `executeCommand`.
+ *  1. A Shoreline registry command (`shoreline.*`) → run via `executeCommand`.
  *  2. Otherwise a Monaco command — a core editing command (`cursorDown`) or
  *     an editor action (`editor.action.*`) — dispatched to the active editor
  *     via `editor.trigger`, which handles both kinds plus clipboard.
@@ -59,6 +59,6 @@ export function dispatchCommand(
     // `trigger` routes editor actions (incl. registerAction2 commands via the
     // command service), core editor commands, and clipboard; the source
     // string is informational only.
-    ed.trigger('sandpiper.keybinding', id, args);
+    ed.trigger('shoreline.keybinding', id, args);
     return true;
 }

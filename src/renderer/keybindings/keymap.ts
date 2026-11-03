@@ -172,7 +172,7 @@ function buildBindingMap(
                 }
                 let handled = false;
                 try {
-                    // Resolves to an Sandpiper command or, failing that, an
+                    // Resolves to a Shoreline command or, failing that, an
                     // editor command on the focused editor. Returns false when
                     // neither applies (no registry command, and no editor with
                     // text focus), so the event falls through to other
@@ -225,13 +225,13 @@ export function installKeymap(
     const groups = groupByKey(entries);
     const map = buildBindingMap(groups);
     // Stop chord leaders (e.g. the Cmd+K of "Cmd+K Cmd+C") from reaching Monaco
-    // so it never enters a hanging chord state when Sandpiper drives the chord.
+    // so it never enters a hanging chord state when Shoreline drives the chord.
     const disposeLeaderGuard = installChordLeaderGuard(entries, target);
     // Capture phase: Monaco's editor keybindings listen on the editor DOM node
     // in the bubble phase and stopPropagation() the keys they handle, which
     // would otherwise shadow our window-level bindings (e.g. Cmd+Enter, which
     // Monaco defaults to "insert line below"). Listening in capture lets an
-    // Sandpiper binding intercept its key before Monaco; keys we don't bind, or
+    // Shoreline binding intercept its key before Monaco; keys we don't bind, or
     // don't handle (when-clause false), fall through untouched.
     const dispose = tinykeys(target, map, { capture: true });
     return {
@@ -246,7 +246,7 @@ export function installKeymap(
 /**
  * Capture chord leaders (the first press of a multi-press binding) before they
  * bubble to Monaco. Monaco's keybinding service treats Cmd+K as a chord prefix
- * and enters a pending state; if Sandpiper then handles the chord's second
+ * and enters a pending state; if Shoreline then handles the chord's second
  * press in capture (stopPropagation), Monaco stays stuck and swallows the next
  * keystroke. Stopping the leader here keeps Monaco out of chord mode. tinykeys
  * (same window+capture target) still sees the leader and advances its own

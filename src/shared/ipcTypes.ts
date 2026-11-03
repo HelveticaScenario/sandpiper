@@ -268,7 +268,7 @@ export interface FileContextMenuOptions {
  * One row in the editor context menu, built in the renderer and shipped to
  * the main process, which materializes a native menu.
  *
- *  - `command`: an Sandpiper registry command. Clicking echoes `commandId`
+ *  - `command`: a Shoreline registry command. Clicking echoes `commandId`
  *    back via ON_CONTEXT_MENU_COMMAND and the renderer runs `executeCommand`.
  *  - `role`: a native Electron clipboard role. The OS performs cut/copy/paste
  *    against the focused editor directly — no round-trip — which is also why

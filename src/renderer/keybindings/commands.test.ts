@@ -1,5 +1,5 @@
 /**
- * Tests for the Sandpiper command registry. The registry is a global
+ * Tests for the Shoreline command registry. The registry is a global
  * singleton, so each test cleans up after itself via `unregisterCommand`.
  */
 

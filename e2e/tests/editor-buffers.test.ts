@@ -98,7 +98,7 @@ test.describe('editor buffers', () => {
         // Compare, then discard local changes.
         await notification.getByRole('button', { name: 'Compare' }).click();
         await expect(window.locator('.save-conflict-panel h2')).toHaveText(
-            'conflict.mjs (in file) ↔ conflict.mjs (in Sandpiper) - Resolve save conflict',
+            'conflict.mjs (in file) ↔ conflict.mjs (in Shoreline) - Resolve save conflict',
         );
         await window.getByRole('button', { name: 'Use file contents' }).click();
         await expect(window.locator('.save-conflict-panel')).toHaveCount(0);

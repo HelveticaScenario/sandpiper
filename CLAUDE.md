@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-"Sandpiper" — a real-time modular synthesizer desktop app with a JavaScript DSL for live-coding audio patches. Electron + React frontend, Rust DSP engine exposed via N-API.
+"Shoreline" — a real-time modular synthesizer desktop app with a JavaScript DSL for live-coding audio patches. Electron + React frontend, Rust DSP engine exposed via N-API.
 
 ## Commands
 

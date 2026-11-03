@@ -1,7 +1,7 @@
 /**
  * `when`-clause diagnostics for the user keybindings.json editor buffer.
  *
- * Sandpiper's when-clause grammar supports a subset of VS Code's operators
+ * Shoreline's when-clause grammar supports a subset of VS Code's operators
  * (`&& || ! == != ( )`). A clause using an unsupported operator (`=~`, `<`,
  * `in`, …) throws when parsed and is then treated as "not matching" at
  * dispatch, so the binding silently never fires. This surfaces that failure in

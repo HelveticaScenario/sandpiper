@@ -7,9 +7,9 @@
 //!
 //! | OS      | Path                                              |
 //! |---------|---------------------------------------------------|
-//! | macOS   | `~/Library/Logs/Sandpiper/`                        |
-//! | Linux   | `~/.config/Sandpiper/logs/`                        |
-//! | Windows | `%APPDATA%\Sandpiper\logs\`                        |
+//! | macOS   | `~/Library/Logs/Shoreline/`                        |
+//! | Linux   | `~/.config/Shoreline/logs/`                        |
+//! | Windows | `%APPDATA%\Shoreline\logs\`                        |
 //!
 //! Falls back to the system temp dir if the relevant env var is unset. Calls
 //! the previously installed panic hook so stderr output is preserved.
@@ -42,7 +42,7 @@ pub fn panic_log_dir() -> PathBuf {
     {
         if let Some(home) = std::env::var_os("HOME") {
             let mut p = PathBuf::from(home);
-            p.push("Library/Logs/Sandpiper");
+            p.push("Library/Logs/Shoreline");
             return p;
         }
     }
@@ -50,7 +50,7 @@ pub fn panic_log_dir() -> PathBuf {
     {
         if let Some(home) = std::env::var_os("HOME") {
             let mut p = PathBuf::from(home);
-            p.push(".config/Sandpiper/logs");
+            p.push(".config/Shoreline/logs");
             return p;
         }
     }
@@ -58,12 +58,12 @@ pub fn panic_log_dir() -> PathBuf {
     {
         if let Some(appdata) = std::env::var_os("APPDATA") {
             let mut p = PathBuf::from(appdata);
-            p.push("Sandpiper");
+            p.push("Shoreline");
             p.push("logs");
             return p;
         }
     }
-    std::env::temp_dir().join("sandpiper-panic-logs")
+    std::env::temp_dir().join("shoreline-panic-logs")
 }
 
 fn write_panic_log(info: &panic::PanicHookInfo<'_>) -> std::io::Result<()> {
@@ -97,7 +97,7 @@ fn write_panic_log(info: &panic::PanicHookInfo<'_>) -> std::io::Result<()> {
 
     let backtrace = Backtrace::force_capture();
 
-    writeln!(f, "==== Sandpiper panic ====")?;
+    writeln!(f, "==== Shoreline panic ====")?;
     writeln!(f, "epoch: {epoch}")?;
     writeln!(f, "pid:   {pid}")?;
     writeln!(f, "thread: {thread_name}")?;

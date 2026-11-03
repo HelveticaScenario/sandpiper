@@ -1,5 +1,5 @@
 /**
- * Default keybindings shipped with Sandpiper.
+ * Default keybindings shipped with Shoreline.
  *
  * Each entry is `(key, command, when?)`. `key` uses tinykeys' binding grammar
  * (https://github.com/jamiebuilds/tinykeys#keybinding-syntax): `$mod` resolves
@@ -11,9 +11,9 @@
  * import are one vocabulary. At load, `mergeKeymap` runs every command through
  * `aliasCommand` (see `vscodeKeys`), rewriting the ids VS Code names
  * differently from their dispatch target (e.g. `workbench.action.gotoLine` →
- * `editor.action.gotoLine`, `workbench.action.files.save` → `sandpiper.save`).
- * Sandpiper-native actions with no VS Code analogue (the transport commands)
- * keep their `sandpiper.*` id, which `aliasCommand` passes through untouched.
+ * `editor.action.gotoLine`, `workbench.action.files.save` → `shoreline.save`).
+ * Shoreline-native actions with no VS Code analogue (the transport commands)
+ * keep their `shoreline.*` id, which `aliasCommand` passes through untouched.
  *
  * `when` is stored verbatim and evaluated against the context-key service at
  * dispatch. An unset or empty clause is always true; a malformed clause is
@@ -33,19 +33,19 @@ export type DefaultKeybinding = {
 };
 
 export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
-    // Transport commands are Sandpiper-native (no VS Code analogue) and use
+    // Transport commands are Shoreline-native (no VS Code analogue) and use
     // physical Control on every platform (Ctrl+Enter, not Cmd+Enter on macOS) —
-    // the long-standing Sandpiper convention, and it leaves Cmd+Enter free for
+    // the long-standing Shoreline convention, and it leaves Cmd+Enter free for
     // Monaco's "insert line below".
-    { key: 'Control+Enter', command: 'sandpiper.updatePatch' },
-    { key: 'Control+Shift+Enter', command: 'sandpiper.updatePatchNextBeat' },
-    { key: 'Control+.', command: 'sandpiper.stop' },
+    { key: 'Control+Enter', command: 'shoreline.updatePatch' },
+    { key: 'Control+Shift+Enter', command: 'shoreline.updatePatchNextBeat' },
+    { key: 'Control+.', command: 'shoreline.stop' },
     // Matched by physical key (`event.code`), so it fires on layouts where
     // typing `\` itself needs extra modifiers.
-    { key: 'Control+(Backslash)', command: 'sandpiper.cancelQueuedUpdate' },
+    { key: 'Control+(Backslash)', command: 'shoreline.cancelQueuedUpdate' },
     // File / app commands use $mod (Cmd on macOS) and are named with their VS
-    // Code command id; `aliasCommand` rewrites each to the `sandpiper.*` it
-    // dispatches to. Sandpiper's "Open Folder" is a workspace/folder picker.
+    // Code command id; `aliasCommand` rewrites each to the `shoreline.*` it
+    // dispatches to. Shoreline's "Open Folder" is a workspace/folder picker.
     { key: '$mod+n', command: 'workbench.action.files.newUntitledFile' },
     { key: '$mod+o', command: 'workbench.action.files.openFolder' },
     { key: '$mod+s', command: 'workbench.action.files.save' },
@@ -53,15 +53,15 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
     { key: '$mod+,', command: 'workbench.action.openSettings' },
     { key: 'F1', command: 'workbench.action.showCommands' },
     { key: '$mod+Shift+p', command: 'workbench.action.showCommands' },
-    { key: '$mod+Shift+m', command: 'sandpiper.toggleVuMeters' },
+    { key: '$mod+Shift+m', command: 'shoreline.toggleVuMeters' },
     // Physical Control on macOS, clear of the Cmd chords. Elsewhere
     // Control+Shift+V is paste as plain text, so the binding takes Y there.
     {
         key: 'Control+Shift+y',
         mac: 'Control+Shift+v',
-        command: 'sandpiper.togglePerformanceWindow',
+        command: 'shoreline.togglePerformanceWindow',
     },
-    { key: 'Control+Shift+h', command: 'sandpiper.togglePerformanceCode' },
+    { key: 'Control+Shift+h', command: 'shoreline.togglePerformanceCode' },
 
     // VS Code editor command ids that mirror VS Code's own default keybindings
     // so the editor context menu can display the shortcut. Monaco handles the
@@ -249,7 +249,7 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
         command: 'editor.action.previousSelectionMatchFindAction',
         when: 'editorFocus',
     },
-    // Off macOS, $mod+. would be Ctrl+., Sandpiper's Stop transport binding, so
+    // Off macOS, $mod+. would be Ctrl+., Shoreline's Stop transport binding, so
     // quick fix takes Alt+. there.
     {
         key: 'alt+.',
@@ -274,7 +274,7 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
         when: '!editorReadonly && editorTextFocus',
     },
     // selectionAnchorSet / hasWordHighlights (below) are transient states
-    // Monaco tracks on its own internal context-key service, which Sandpiper
+    // Monaco tracks on its own internal context-key service, which Shoreline
     // can't observe. We gate only on editorTextFocus and let editor.trigger
     // run: the action's Monaco precondition makes it a safe no-op when no
     // anchor is set / no highlights are shown.

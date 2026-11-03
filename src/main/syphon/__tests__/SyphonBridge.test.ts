@@ -17,7 +17,7 @@ vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 vi.mock('electron', () => ({
     app: {
         isPackaged: false,
-        getPath: () => '/Apps/Sandpiper.app/Contents/MacOS/Sandpiper',
+        getPath: () => '/Apps/Shoreline.app/Contents/MacOS/Shoreline',
     },
 }));
 
@@ -118,7 +118,7 @@ describe('SyphonBridge', () => {
         expect(res).toEqual({ ok: true });
         expect(spawnMock).toHaveBeenCalledTimes(1);
         const [, args] = spawnMock.mock.calls[0];
-        expect(args).toEqual(['42', 'Sandpiper', '60']);
+        expect(args).toEqual(['42', 'Shoreline', '60']);
         expect(statuses).toContain('starting');
         expect(bridge.isActive).toBe(true);
     });

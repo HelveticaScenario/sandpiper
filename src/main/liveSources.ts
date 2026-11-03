@@ -52,7 +52,7 @@ export async function screenSource(
             .getSources({ types: ['screen'] })
             .catch(() => undefined);
         return {
-            error: 'screen recording is not allowed; allow Sandpiper under System Settings, Privacy & Security, Screen Recording, then restart it',
+            error: 'screen recording is not allowed; allow Shoreline under System Settings, Privacy & Security, Screen Recording, then restart it',
         };
     }
     const sources = await desktopCapturer.getSources({

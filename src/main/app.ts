@@ -95,7 +95,7 @@ process.setSourceMapsEnabled(true);
 //
 // This switch must be set before app `ready`, before we know whether the user
 // will ever enable Syphon, so it is necessarily global rather than gated on the
-// feature. The only residual cost is that a *fully covered* Sandpiper window
+// feature. The only residual cost is that a *fully covered* Shoreline window
 // keeps compositing; the heavier background timer/rAF throttling IS gated on the
 // feature at runtime — see applySyphonRenderTuning().
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -199,15 +199,15 @@ function setupSyphonBridge(): void {
 function promptScreenRecordingPermission(): void {
     // In dev, macOS attributes Screen Recording to the *responsible process* —
     // the app that launched the `yarn start` process tree (your terminal or
-    // editor, e.g. Visual Studio Code), not "Sandpiper"/"Electron". A packaged
-    // build run from Finder attributes it to Sandpiper.app, which is the real
+    // editor, e.g. Visual Studio Code), not "Shoreline"/"Electron". A packaged
+    // build run from Finder attributes it to Shoreline.app, which is the real
     // behavior the dialog below describes.
     if (!app.isPackaged) {
         console.warn(
             '[syphon-bridge] Dev permission note: grant Screen Recording to the app ' +
                 'that launched `yarn start` (your terminal / VS Code), then fully quit ' +
-                'and reopen it. Granting "Sandpiper"/"Electron"/"sandpiper-syphon" will ' +
-                'not help in dev. Test the real Sandpiper.app attribution via `yarn package`.',
+                'and reopen it. Granting "Shoreline"/"Electron"/"shoreline-syphon" will ' +
+                'not help in dev. Test the real Shoreline.app attribution via `yarn package`.',
         );
     }
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -216,7 +216,7 @@ function promptScreenRecordingPermission(): void {
             buttons: ['Open System Settings', 'Not Now'],
             defaultId: 0,
             detail:
-                'To publish the Sandpiper window to Syphon, allow Sandpiper under ' +
+                'To publish the Shoreline window to Syphon, allow Shoreline under ' +
                 'Privacy & Security → Screen & System Audio Recording, then enable ' +
                 '“Toggle Syphon Output” again.',
             message: 'Screen Recording permission needed',
@@ -233,7 +233,7 @@ function promptScreenRecordingPermission(): void {
 
 /**
  * Toggles Syphon publishing for the View-menu checkboxes and the
- * `sandpiper.toggleSyphon` command, which share its failure dialog.
+ * `shoreline.toggleSyphon` command, which share its failure dialog.
  * `requested` names the window a checkbox stands for; the command names none
  * (see {@link syphonAction}).
  */
@@ -345,7 +345,7 @@ console.debug = createLogInterceptor('debug');
 // Update Service
 // ========================================================================
 
-const GITHUB_REPO = 'HelveticaScenario/sandpiper';
+const GITHUB_REPO = 'HelveticaScenario/shoreline';
 const UPDATE_FEED_URL = `https://update.electronjs.org/${GITHUB_REPO}`;
 const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 
@@ -515,7 +515,7 @@ if (!app.isPackaged && !app.commandLine.hasSwitch('user-data-dir')) {
 // config, or unsaved buffers with an instance the user is running.
 if (BACKGROUND_LAUNCH && !app.commandLine.hasSwitch('user-data-dir')) {
     const profile = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'sandpiper-background-'),
+        path.join(os.tmpdir(), 'shoreline-background-'),
     );
     app.setPath('userData', profile);
     process.on('exit', () =>
@@ -914,7 +914,7 @@ function registerIPCHandler<T extends keyof typeof IPC_CHANNELS>(
 registerIPCHandler('GET_SCHEMAS', () => schemas);
 
 // Syphon window output (macOS): the action lives here, so the renderer's
-// sandpiper.toggleSyphon command (palette/keymap) round-trips through IPC.
+// shoreline.toggleSyphon command (palette/keymap) round-trips through IPC.
 registerIPCHandler('SYPHON_TOGGLE', () => toggleSyphonPublish());
 registerIPCHandler('SYPHON_IS_SUPPORTED', () => SyphonBridge.supported);
 
@@ -1967,17 +1967,17 @@ const KeybindingOverrideSchema = z.object({
     args: z.unknown().optional(),
 });
 
-const KEYBINDINGS_TEMPLATE = `// Sandpiper keybindings — VS Code keybindings.json format.
+const KEYBINDINGS_TEMPLATE = `// Shoreline keybindings — VS Code keybindings.json format.
 //
 // "key" uses VS Code syntax: cmd / ctrl / alt / shift, and chords separated
-// by spaces (e.g. "cmd+k cmd+i"). "command" is an Sandpiper command
-// (sandpiper.*) or a Monaco editor command (editor.action.revealDefinition,
+// by spaces (e.g. "cmd+k cmd+i"). "command" is a Shoreline command
+// (shoreline.*) or a Monaco editor command (editor.action.revealDefinition,
 // cursorDown, ...). Prefix a command with "-" to remove a binding. Changes
 // take effect when you save this file.
 [
-    // { "key": "cmd+enter", "command": "sandpiper.updatePatch" },
-    // { "key": "cmd+.", "command": "sandpiper.stop" },
-    // { "key": "cmd+p", "command": "sandpiper.showCommandPalette" },
+    // { "key": "cmd+enter", "command": "shoreline.updatePatch" },
+    // { "key": "cmd+.", "command": "shoreline.stop" },
+    // { "key": "cmd+p", "command": "shoreline.showCommandPalette" },
     // {
     //     "key": "f12",
     //     "command": "editor.action.revealDefinition",
@@ -2121,7 +2121,7 @@ const createWindow = (): void => {
                     backgroundColor: '#000000',
                     height: 720,
                     show: !BACKGROUND_LAUNCH,
-                    title: 'Sandpiper Performance',
+                    title: 'Shoreline Performance',
                     width: 1280,
                 },
             };
@@ -2258,7 +2258,7 @@ const createMenu = (): void => {
                           { type: 'separator' },
                           {
                               ...menuShortcut(
-                                  'sandpiper.openSettings',
+                                  'shoreline.openSettings',
                                   'Cmd+,',
                               ),
                               click: () => {
@@ -2287,7 +2287,7 @@ const createMenu = (): void => {
             label: 'File',
             submenu: [
                 {
-                    ...menuShortcut('sandpiper.newFile', 'CmdOrCtrl+N'),
+                    ...menuShortcut('shoreline.newFile', 'CmdOrCtrl+N'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2298,7 +2298,7 @@ const createMenu = (): void => {
                     label: 'New File',
                 },
                 {
-                    ...menuShortcut('sandpiper.openWorkspace', 'CmdOrCtrl+O'),
+                    ...menuShortcut('shoreline.openWorkspace', 'CmdOrCtrl+O'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2310,7 +2310,7 @@ const createMenu = (): void => {
                 },
                 { type: 'separator' },
                 {
-                    ...menuShortcut('sandpiper.save', 'CmdOrCtrl+S'),
+                    ...menuShortcut('shoreline.save', 'CmdOrCtrl+S'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2321,7 +2321,7 @@ const createMenu = (): void => {
                     label: 'Save',
                 },
                 {
-                    ...menuShortcut('sandpiper.closeBuffer', 'CmdOrCtrl+W'),
+                    ...menuShortcut('shoreline.closeBuffer', 'CmdOrCtrl+W'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2337,7 +2337,7 @@ const createMenu = (): void => {
                     : ([
                           {
                               ...menuShortcut(
-                                  'sandpiper.openSettings',
+                                  'shoreline.openSettings',
                                   'Ctrl+,',
                               ),
                               click: () => {
@@ -2412,7 +2412,7 @@ const createMenu = (): void => {
                 },
                 {
                     ...menuShortcut(
-                        'sandpiper.togglePerformanceWindow',
+                        'shoreline.togglePerformanceWindow',
                         isMac ? 'Ctrl+Shift+V' : 'Ctrl+Shift+Y',
                     ),
                     click: () =>
@@ -2434,7 +2434,7 @@ const createMenu = (): void => {
                         }
                     },
                     ...menuShortcut(
-                        'sandpiper.toggleVuMeters',
+                        'shoreline.toggleVuMeters',
                         'CmdOrCtrl+Shift+M',
                     ),
                     label: 'Toggle VU Meters',
@@ -2447,7 +2447,7 @@ const createMenu = (): void => {
                           {
                               checked: syphonPublishing('editor'),
                               // Funnels through the same toggle as the
-                              // sandpiper.toggleSyphon command (palette/keymap).
+                              // shoreline.toggleSyphon command (palette/keymap).
                               click: () => {
                                   toggleSyphonPublish('editor');
                               },
@@ -2473,7 +2473,7 @@ const createMenu = (): void => {
             label: 'Run',
             submenu: [
                 {
-                    ...menuShortcut('sandpiper.updatePatch', 'Ctrl+Enter'),
+                    ...menuShortcut('shoreline.updatePatch', 'Ctrl+Enter'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2485,7 +2485,7 @@ const createMenu = (): void => {
                 },
                 {
                     ...menuShortcut(
-                        'sandpiper.updatePatchNextBeat',
+                        'shoreline.updatePatchNextBeat',
                         'Ctrl+Shift+Enter',
                     ),
                     click: (_item, focusedWindow) => {
@@ -2500,7 +2500,7 @@ const createMenu = (): void => {
                     label: 'Update Patch (Next Beat)',
                 },
                 {
-                    ...menuShortcut('sandpiper.stop', 'Ctrl+.'),
+                    ...menuShortcut('shoreline.stop', 'Ctrl+.'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2511,7 +2511,7 @@ const createMenu = (): void => {
                     label: 'Stop Sound',
                 },
                 {
-                    ...menuShortcut('sandpiper.cancelQueuedUpdate', 'Ctrl+\\'),
+                    ...menuShortcut('shoreline.cancelQueuedUpdate', 'Ctrl+\\'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(

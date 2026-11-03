@@ -2497,8 +2497,8 @@ where
                         .link
                         .capture_buffer_state(audio_processor.sample_rate);
 
-                    // Sandpiper transport is decoupled from Link peer transport:
-                    // peers never start or stop Sandpiper. The only Link-driven transport
+                    // Shoreline transport is decoupled from Link peer transport:
+                    // peers never start or stop Shoreline. The only Link-driven transport
                     // action is releasing a locally-initiated quantized start when the
                     // shared timeline reaches a bar boundary.
                     if audio_processor.link.check_pending_start_release() {
@@ -2511,7 +2511,7 @@ where
 
                     // Write Link state to transport meter for UI visibility. Done
                     // BEFORE the is_stopped() guard so the UI always shows the
-                    // free-running Link phase, even when Sandpiper is stopped.
+                    // free-running Link phase, even when Shoreline is stopped.
                     audio_processor
                         .link
                         .write_meter(&audio_processor.transport_meter);

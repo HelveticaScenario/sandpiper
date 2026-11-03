@@ -1,4 +1,4 @@
-# Sandpiper
+# Shoreline
 
 A real-time modular synthesizer desktop app with a JavaScript DSL for live-coding audio patches, built with Electron and a Rust DSP engine.
 
@@ -32,8 +32,8 @@ git submodule update --init --recursive
 > **Note:** Failure to do so will produce an error along the lines of:
 
 ```
-error: failed to load manifest for workspace member `/projects/sandpiper/crates/modular_core`
-referenced by workspace at `/projects/sandpiper/Cargo.toml`
+error: failed to load manifest for workspace member `/projects/shoreline/crates/modular_core`
+referenced by workspace at `/projects/shoreline/Cargo.toml`
 ```
 
 ### Running the App
