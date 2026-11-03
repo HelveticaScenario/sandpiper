@@ -172,7 +172,7 @@ function buildBindingMap(
                 }
                 let handled = false;
                 try {
-                    // Resolves to an Shoreline command or, failing that, an
+                    // Resolves to a Shoreline command or, failing that, an
                     // editor command on the focused editor. Returns false when
                     // neither applies (no registry command, and no editor with
                     // text focus), so the event falls through to other

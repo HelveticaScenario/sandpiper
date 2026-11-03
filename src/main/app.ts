@@ -1970,7 +1970,7 @@ const KeybindingOverrideSchema = z.object({
 const KEYBINDINGS_TEMPLATE = `// Shoreline keybindings — VS Code keybindings.json format.
 //
 // "key" uses VS Code syntax: cmd / ctrl / alt / shift, and chords separated
-// by spaces (e.g. "cmd+k cmd+i"). "command" is an Shoreline command
+// by spaces (e.g. "cmd+k cmd+i"). "command" is a Shoreline command
 // (shoreline.*) or a Monaco editor command (editor.action.revealDefinition,
 // cursorDown, ...). Prefix a command with "-" to remove a binding. Changes
 // take effect when you save this file.
