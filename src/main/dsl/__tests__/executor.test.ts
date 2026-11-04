@@ -15,6 +15,7 @@ import { type DSLExecutionResult, executePatchScript } from '../executor';
 import { FIRST_LINE_COLUMN_OFFSET } from '../../../shared/dsl/spanTypes';
 import {
     isBeatPattern,
+    isGlidePattern,
     isFastPattern,
     isParsedPattern,
     isStructPattern,
@@ -876,6 +877,27 @@ describe('sequencing', () => {
         const divSpan = pattern.argument_spans[2];
         expect(
             source.slice(divSpan.start, divSpan.end).includes('<16 8>'),
+        ).toBe(true);
+    });
+
+    test('.glide captures a string glide argument span for highlighting', () => {
+        const source =
+            'const pat = $p("c4 e4").glide("0 0.25")\n' +
+            'const seq = $cycle(pat)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const pattern = findModules(patch, '$cycle')[0].params.pattern;
+        expect(isGlidePattern(pattern)).toBe(true);
+        if (!isGlidePattern(pattern)) return;
+        // Spans flatten as [inner, glide] — matching the Rust per_source order.
+        expect(pattern.argument_spans.length).toBe(2);
+        const innerSpan = pattern.argument_spans[0];
+        expect(
+            source.slice(innerSpan.start, innerSpan.end).includes('c4 e4'),
+        ).toBe(true);
+        const glideSpan = pattern.argument_spans[1];
+        expect(
+            source.slice(glideSpan.start, glideSpan.end).includes('0 0.25'),
         ).toBe(true);
     });
 

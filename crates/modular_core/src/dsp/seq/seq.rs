@@ -22,6 +22,7 @@ use crate::{
     poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
 };
 
+use super::glide::{GlideRamp, Lookahead, OpenGlide};
 use super::groove::{GrooveHold, before_first_step, fill_groove_inputs};
 use super::seq_value::{SeqCycleStorage, SeqPatternParam, SeqValue};
 
@@ -59,7 +60,7 @@ impl CachedHap {
 
     fn get_cv(&self) -> Option<f64> {
         match self.value {
-            SeqValue::Voltage(v) => Some(v),
+            SeqValue::Voltage { volts, .. } => Some(volts),
             SeqValue::Rest => None,
         }
     }
@@ -396,6 +397,8 @@ struct SeqChannel {
     last_cv: f32,
     /// Velocity input latched at this voice's last onset.
     velocity: f32,
+    /// Ramp into the upcoming note this voice has claimed.
+    glide: Option<GlideRamp>,
 }
 
 /// Module-level state for the Seq module.
@@ -468,7 +471,9 @@ impl Seq {
             (h.whole_begin - cached.whole_begin).abs() < EPS
                 && (h.whole_end - cached.whole_end).abs() < EPS
                 && match (h.value, cached.value) {
-                    (SeqValue::Voltage(a), SeqValue::Voltage(b)) => (a - b).abs() < EPS,
+                    (SeqValue::Voltage { volts: a, .. }, SeqValue::Voltage { volts: b, .. }) => {
+                        (a - b).abs() < EPS
+                    }
                     (SeqValue::Rest, SeqValue::Rest) => true,
                     _ => false,
                 }
@@ -556,6 +561,19 @@ impl Seq {
                 .set_state(TempGateState::Low, TempGateState::Low, 0);
         }
 
+        // Ramps whose target vanished hand their current CV to the next
+        // claim on the same voice, so a pattern swap mid-ramp re-aims rather
+        // than snapping back.
+        let mut resume_cv: [Option<f32>; PORT_MAX_CHANNELS] = [None; PORT_MAX_CHANNELS];
+        for (ch, resume) in resume_cv.iter_mut().enumerate().take(num_channels) {
+            if let Some(ramp) = self.channel_state[ch].glide
+                && !ramp.is_live(raw_clamped, base, self.params.pattern.cached_haps())
+            {
+                *resume = Some(ramp.value_at(raw_clamped));
+                self.channel_state[ch].glide = None;
+            }
+        }
+
         if self.params.pattern.pattern().is_none() {
             for ch in 0..num_channels {
                 self.outputs.cv.set(ch, 0.0);
@@ -572,7 +590,7 @@ impl Seq {
             return;
         }
         if waiting {
-            self.write_voice_outputs();
+            self.write_voice_outputs(raw_clamped);
             return;
         }
 
@@ -652,14 +670,25 @@ impl Seq {
         // pattern — so a new hap is never dropped while a stale note rings. A
         // current-pattern continuation is never stolen. Onsets with no free,
         // ended or orphan voice are dropped.
+        //
+        // A gliding onset goes to the voice that claimed it, and no other
+        // onset takes a claimed voice.
         let n = self.state.events_to_process.len();
         if n > 0 {
             let mut assigned: [Option<usize>; PORT_MAX_CHANNELS] = [None; PORT_MAX_CHANNELS];
+            for (ei, event) in self.state.events_to_process.iter().enumerate() {
+                assigned[ei] = (0..num_channels).find(|&i| {
+                    self.channel_state[i]
+                        .glide
+                        .is_some_and(|ramp| ramp.targets(current_cycle, event.hap_index))
+                });
+            }
+            let claimed = |channel: &SeqChannel| channel.glide.is_some();
 
             // Tier 1: free voices.
             let mut free: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
             for i in 0..num_channels {
-                if !self.channel_state[i].voice.active {
+                if !self.channel_state[i].voice.active && !claimed(&self.channel_state[i]) {
                     free.push(i);
                 }
             }
@@ -684,6 +713,7 @@ impl Seq {
                 let mut ended: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
                 for i in 0..num_channels {
                     if self.channel_state[i].voice.active
+                        && !claimed(&self.channel_state[i])
                         && let Some(cached) = self.channel_state[i].voice.cached_hap
                         && raw >= cached.raw_end
                     {
@@ -710,6 +740,7 @@ impl Seq {
                 let mut orphans: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
                 for i in 0..num_channels {
                     if self.channel_state[i].voice.active
+                        && !claimed(&self.channel_state[i])
                         && !assigned[..n].contains(&Some(i))
                         && let Some(cached) = self.channel_state[i].voice.cached_hap
                         && self.voice_is_orphan(&cached)
@@ -740,6 +771,7 @@ impl Seq {
                 };
                 let event = self.state.events_to_process[ei];
                 self.channel_state[voice_idx].velocity = velocity;
+                self.channel_state[voice_idx].glide = None;
                 let voice = &mut self.channel_state[voice_idx].voice;
                 voice.cached_hap = Some(CachedHap {
                     hap_index: event.hap_index,
@@ -761,10 +793,74 @@ impl Seq {
             }
         }
 
-        self.write_voice_outputs();
+        if self.params.pattern.max_glide > 0.0 {
+            self.claim_glides(pos, raw, raw_clamped, &resume_cv);
+        }
+
+        self.write_voice_outputs(raw_clamped);
     }
 
-    fn write_voice_outputs(&mut self) {
+    /// Give each note whose glide window has opened to the free-at-onset voice
+    /// nearest its pitch. A voice is free at the onset when it is silent or
+    /// its note ends by then; with none free, the note jumps at its onset.
+    fn claim_glides(
+        &mut self,
+        pos: f64,
+        raw: f64,
+        raw_clamped: f64,
+        resume_cv: &[Option<f32>; PORT_MAX_CHANNELS],
+    ) {
+        const EPS: f64 = 1e-9;
+        let num_channels = self.channel_count();
+        let (offset, length) = self.params.ribbon;
+        let lookahead = Lookahead {
+            cached_haps: self.params.pattern.cached_haps(),
+            base: offset.floor() as i64,
+            offset,
+            length,
+            pos,
+            max_glide: self.params.pattern.max_glide,
+        };
+        let channels = &mut self.channel_state[..num_channels];
+        lookahead.for_each_open(|open: OpenGlide| {
+            if channels.iter().any(|channel| {
+                channel
+                    .glide
+                    .is_some_and(|ramp| ramp.targets(open.cycle, open.hap_index))
+            }) {
+                return;
+            }
+            let free_at_onset = |channel: &SeqChannel| {
+                channel.glide.is_none()
+                    && (!channel.voice.active
+                        || channel
+                            .voice
+                            .cached_hap
+                            .is_some_and(|held| held.raw_end <= raw + open.distance + EPS))
+            };
+            let nearest = (0..channels.len())
+                .filter(|&ch| free_at_onset(&channels[ch]))
+                .map(|ch| (ch, resume_cv[ch].unwrap_or(channels[ch].last_cv)))
+                .min_by(|a, b| {
+                    (a.1 - open.target)
+                        .abs()
+                        .total_cmp(&(b.1 - open.target).abs())
+                });
+            if let Some((ch, from)) = nearest {
+                channels[ch].glide = Some(GlideRamp {
+                    cycle: open.cycle,
+                    hap_index: open.hap_index,
+                    whole_begin: open.whole_begin,
+                    from,
+                    target: open.target,
+                    start: raw_clamped,
+                    end: raw_clamped + open.distance,
+                });
+            }
+        });
+    }
+
+    fn write_voice_outputs(&mut self, raw: f64) {
         for ch in 0..self.channel_count() {
             let channel = &mut self.channel_state[ch];
             if let Some(cached) = channel.voice.cached_hap
@@ -772,7 +868,10 @@ impl Seq {
             {
                 channel.last_cv = cv as f32;
             }
-            self.outputs.cv.set(ch, channel.last_cv);
+            let cv = channel
+                .glide
+                .map_or(channel.last_cv, |ramp| ramp.value_at(raw));
+            self.outputs.cv.set(ch, cv);
             self.outputs.gate.set(ch, channel.voice.gate.process());
             self.outputs.trig.set(ch, channel.voice.trigger.process());
             self.outputs.velocity.set(ch, channel.velocity);
@@ -945,7 +1044,9 @@ fn resolve_hap_index(storage: &SeqCycleStorage, cached: &CachedHap) -> Option<us
     // tie-breaker, not a requirement: a live state transfer onto a pattern
     // with different values must still re-resolve by geometry alone.
     let value_matches = |value: &SeqValue| match (value, &cached.value) {
-        (SeqValue::Voltage(a), SeqValue::Voltage(b)) => (a - b).abs() < EPS,
+        (SeqValue::Voltage { volts: a, .. }, SeqValue::Voltage { volts: b, .. }) => {
+            (a - b).abs() < EPS
+        }
         (SeqValue::Rest, SeqValue::Rest) => true,
         _ => false,
     };
@@ -1068,7 +1169,7 @@ mod tests {
             hap_index: 0,
             whole_begin: 0.0,
             whole_end: 1.0,
-            value: SeqValue::Voltage(v),
+            value: SeqValue::voltage(v),
         }
     }
 

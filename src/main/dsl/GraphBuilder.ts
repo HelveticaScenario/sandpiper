@@ -2945,7 +2945,7 @@ export function replaceValues(input: unknown, replacer: Replacer): unknown {
 
         // Opaque payloads (ParsedPattern from $p(), SpPattern from $p.s(),
         // ArrangePattern from $p.arrange(), and the .fast()/.slow()/.struct()/
-        // .beat() wrappers) must be preserved verbatim — walking them would
+        // .beat()/.glide() wrappers) must be preserved verbatim — walking them would
         // collapse the nulls in `accidental`/`octave`/weight slots to 0 via
         // valueToSignal, producing zero-duration haps and silence. Returning the
         // wrapper verbatim also preserves the nested pattern payloads it carries.
@@ -3024,7 +3024,7 @@ export function replaceDeferredStrings(
     if (typeof input === 'object' && input !== null) {
         // Opaque pattern payloads (ParsedPattern from $p(), SpPattern from
         // $p.s(), ArrangePattern from $p.arrange(), and the .fast()/.slow()/
-        // .struct()/.beat() wrappers) are JSON-only data with no deferred-output
+        // .struct()/.beat()/.glide() wrappers) are JSON-only data with no deferred-output
         // strings; mirror the replaceValues short-circuit and return them
         // verbatim instead of deep-walking their mini-notation AST sub-tree.
         // SignalGroup wrappers are deliberately NOT listed here either — their

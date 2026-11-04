@@ -1,7 +1,7 @@
 /**
  * Wire-shape discriminators of every pattern value a signal accepts: `$p(...)`,
- * `$p.s(...)`, `$p.arrange(...)` and the `.fast`/`.slow`/`.struct`/`.beat`
- * chains built from them.
+ * `$p.s(...)`, `$p.arrange(...)` and the `.fast`/`.slow`/`.struct`/`.beat`/
+ * `.glide` chains built from them.
  */
 export const PATTERN_KINDS: ReadonlySet<unknown> = new Set([
     'ParsedPattern',
@@ -11,6 +11,7 @@ export const PATTERN_KINDS: ReadonlySet<unknown> = new Set([
     'SlowPattern',
     'StructPattern',
     'BeatPattern',
+    'GlidePattern',
 ]);
 
 export interface PatternValue {

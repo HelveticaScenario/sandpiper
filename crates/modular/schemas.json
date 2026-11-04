@@ -22215,6 +22215,34 @@
             "factor"
           ]
         },
+        "GlideKindTag": {
+          "description": "Phantom discriminator matching the literal `\"GlidePattern\"` string.",
+          "type": "string",
+          "enum": [
+            "GlidePattern"
+          ]
+        },
+        "GlidePatternPayload": {
+          "description": "JSON payload for `$p(...).glide(length)`: give each note of `pattern` a CV\nramp `length` cycles long that ends on its onset. `length` follows\n[`FactorPayload`]'s const-vs-pattern duality and is sampled at each onset;\nnegative lengths jump.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.glide` sets this so the `SeqPatternSource`\nuntagged enum picks the `Glide` variant.",
+              "$ref": "#/$defs/GlideKindTag"
+            },
+            "length": {
+              "$ref": "#/$defs/FactorPayload"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "length"
+          ]
+        },
         "InfinityTag": {
           "description": "Phantom discriminator matching the literal `\"Infinity\"` string.",
           "type": "string",
@@ -23861,6 +23889,9 @@
             },
             {
               "$ref": "#/$defs/BeatPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/GlidePatternPayload"
             },
             {
               "$ref": "#/$defs/ArrangePatternPayload"

@@ -71,6 +71,7 @@ export function resolveRef(
     | 'SlowPattern'
     | 'StructPattern'
     | 'BeatPattern'
+    | 'GlidePattern'
     | 'ScaleSpec' {
     if (ref === 'Signal') {
         return 'Signal';
@@ -101,6 +102,9 @@ export function resolveRef(
     }
     if (ref === 'BeatPatternPayload') {
         return 'BeatPattern';
+    }
+    if (ref === 'GlidePatternPayload') {
+        return 'GlidePattern';
     }
 
     const defsPrefix = '#/$defs/';
@@ -147,8 +151,8 @@ export function resolveRef(
     if (defName === 'ArrangePatternPayload') {
         return 'ArrangePattern';
     }
-    // The `.fast(...)` / `.slow(...)` / `.struct(...)` / `.beat(...)` wrapper
-    // payloads recurse (the wrapped `pattern` is a `SeqPatternSource`), so the
+    // The `.fast(...)` / `.slow(...)` / `.struct(...)` / `.beat(...)` /
+    // `.glide(...)` wrapper payloads recurse (the wrapped `pattern` is a `SeqPatternSource`), so the
     // DSL exposes them as named types like the others above.
     if (defName === 'FastPatternPayload') {
         return 'FastPattern';
@@ -161,6 +165,9 @@ export function resolveRef(
     }
     if (defName === 'BeatPatternPayload') {
         return 'BeatPattern';
+    }
+    if (defName === 'GlidePatternPayload') {
+        return 'GlidePattern';
     }
 
     const defs = rootSchema?.$defs;
@@ -208,6 +215,9 @@ export function resolveRef(
     }
     if (resolved?.title === 'BeatPatternPayload') {
         return 'BeatPattern';
+    }
+    if (resolved?.title === 'GlidePatternPayload') {
+        return 'GlidePattern';
     }
     return resolved;
 }
@@ -405,6 +415,9 @@ export function schemaToTypeExpr(
         }
         if (resolved === 'BeatPattern') {
             return 'BeatPattern';
+        }
+        if (resolved === 'GlidePattern') {
+            return 'GlidePattern';
         }
         if (resolved === 'ScaleSpec') {
             return 'ScaleSpec';

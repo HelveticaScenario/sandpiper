@@ -210,7 +210,7 @@ function chainRootIsPs(
 }
 
 /** Pattern methods whose argument spans the analyzer tracks. */
-type PatternMethodName = 'fast' | 'slow' | 'struct' | 'beat';
+type PatternMethodName = 'fast' | 'slow' | 'struct' | 'beat' | 'glide';
 
 /** Which argument names each pattern method registers, in positional order. */
 const PATTERN_METHOD_ARGS: Record<PatternMethodName, ReadonlyArray<string>> = {
@@ -218,11 +218,12 @@ const PATTERN_METHOD_ARGS: Record<PatternMethodName, ReadonlyArray<string>> = {
     slow: ['factor'],
     struct: ['boolPattern'],
     beat: ['t', 'div'],
+    glide: ['g'],
 };
 
 /**
  * Identify `<pattern>.fast(factor)` / `.slow(factor)` / `.struct(boolPattern)`
- * / `.beat(t, div)` calls, where `<pattern>` is any pattern-producing chain:
+ * / `.beat(t, div)` / `.glide(g)` calls, where `<pattern>` is any pattern-producing chain:
  * `$p(...)`, `$p.s(...)`, `$p.arrange(...)`, a nested wrapper/`.add`/`.sub`
  * link, or a const-bound pattern. Returns the method name so the caller can
  * register each argument literal under the name the method looks up via
@@ -885,7 +886,7 @@ export function analyzeArgumentSpans(
         }
 
         // Track pattern-method calls (`.fast(factor)`, `.slow(factor)`,
-        // `.struct(boolPattern)`, `.beat(t, div)`): register each argument
+        // `.struct(boolPattern)`, `.beat(t, div)`, `.glide(g)`): register each argument
         // literal's span under its parameter name so the method captures it
         // via captureSourceLocation()+lookupArgumentSpan(loc, <argName>).
         // Keyed at the method name's position, like the `$p.s` chain above.
