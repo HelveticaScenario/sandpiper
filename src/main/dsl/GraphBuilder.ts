@@ -3024,9 +3024,8 @@ export function replaceDeferredStrings(
     if (typeof input === 'object' && input !== null) {
         // Opaque pattern payloads (ParsedPattern from $p(), SpPattern from
         // $p.s(), ArrangePattern from $p.arrange(), and the .fast()/.slow()/
-        // .struct()/.beat()/.glide() wrappers) are JSON-only data with no deferred-output
-        // strings; mirror the replaceValues short-circuit and return them
-        // verbatim instead of deep-walking their mini-notation AST sub-tree.
+        // .struct()/.beat()/.glide() wrappers) are JSON-only data with no
+        // deferred-output strings, so they return verbatim, as in replaceValues.
         // SignalGroup wrappers are deliberately NOT listed here either — their
         // signals payload may carry deferred-output strings to resolve.
         if (isPatternValue(input)) {

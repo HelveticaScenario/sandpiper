@@ -84,6 +84,10 @@ pub(crate) fn populate_cycle_storage(
         .sort_by(|a, b| a.part_begin.total_cmp(&b.part_begin));
 }
 
+/// Tolerance, in cycles or volts, for matching a held or claimed note to a
+/// baked hap across a re-bake.
+pub(crate) const HAP_MATCH_EPS: f64 = 1e-6;
+
 /// A value in a sequence pattern.
 ///
 /// Represents the different types of values that can be sequenced:
@@ -121,6 +125,26 @@ impl SeqValue {
     /// Check if this is a rest value.
     pub fn is_rest(&self) -> bool {
         matches!(self, SeqValue::Rest)
+    }
+
+    /// Glide length in cycles; zero for a rest.
+    pub fn glide(&self) -> f64 {
+        match self {
+            SeqValue::Voltage { glide, .. } => *glide,
+            SeqValue::Rest => 0.0,
+        }
+    }
+
+    /// True when both are rests or both are the same pitch within
+    /// [`HAP_MATCH_EPS`]. Glide length does not count.
+    pub(crate) fn same_pitch(&self, other: &SeqValue) -> bool {
+        match (self, other) {
+            (SeqValue::Voltage { volts: a, .. }, SeqValue::Voltage { volts: b, .. }) => {
+                (a - b).abs() < HAP_MATCH_EPS
+            }
+            (SeqValue::Rest, SeqValue::Rest) => true,
+            _ => false,
+        }
     }
 }
 
@@ -709,17 +733,25 @@ impl JsonSchema for SeqPatternParam {
 }
 
 impl SeqPatternParam {
-    fn from_payload(payload: ParsedPatternPayload) -> Result<Self, String> {
-        let (pattern, per_source) = Self::lower_single(payload)?;
-        // Parse-only: leave `cached_haps` empty. `Seq`'s `validate` hook
-        // bakes the ribbon window once both `pattern` and `ribbon` are known.
-        Ok(Self {
+    /// A parsed pattern with nothing baked yet. `Seq`'s `validate` hook bakes
+    /// the ribbon window once both `pattern` and `ribbon` are known.
+    fn unbaked(
+        pattern: Pattern<SeqValue>,
+        per_source: Vec<SeqSourceMeta>,
+        is_multi_source: bool,
+    ) -> Self {
+        Self {
             per_source,
-            is_multi_source: false,
+            is_multi_source,
             pattern: Some(pattern),
             cached_haps: Arc::default(),
             max_glide: 0.0,
-        })
+        }
+    }
+
+    fn from_payload(payload: ParsedPatternPayload) -> Result<Self, String> {
+        let (pattern, per_source) = Self::lower_single(payload)?;
+        Ok(Self::unbaked(pattern, per_source, false))
     }
 
     /// Lower a single `$p(...)` payload to a runtime pattern + its one source
@@ -805,13 +837,7 @@ impl SeqPatternParam {
     /// Build a `SeqPatternParam` from an `$p.arrange(...)` payload.
     pub fn from_arrange_payload(payload: ArrangePatternPayload) -> Result<Self, String> {
         let (pattern, per_source) = Self::lower_arrange(payload)?;
-        Ok(Self {
-            per_source,
-            is_multi_source: true,
-            pattern: Some(pattern),
-            cached_haps: Arc::default(),
-            max_glide: 0.0,
-        })
+        Ok(Self::unbaked(pattern, per_source, true))
     }
 
     /// Lower a `.fast(...)` wrapper: lower the inner pattern, build the factor
@@ -893,9 +919,10 @@ impl SeqPatternParam {
     }
 
     /// Lower a `.glide(...)` wrapper: lower the inner pattern and tag each
-    /// note with the glide length sampled at its onset. Structure comes from
-    /// the notes; a pattern length is its own highlightable source, appended
-    /// after the inner sources like a `.fast` factor.
+    /// note with the glide length at its onset, or zero where the length
+    /// pattern is silent. Notes keep their own timing; a pattern length is its own
+    /// highlightable source, appended after the inner sources like a `.fast`
+    /// factor.
     fn lower_glide(
         payload: GlidePatternPayload,
     ) -> Result<(Pattern<SeqValue>, Vec<SeqSourceMeta>), String> {
@@ -904,10 +931,10 @@ impl SeqPatternParam {
         if let Some(meta) = length_meta {
             per_source.push(meta);
         }
-        let glided = inner.app_left(&length, |value, length| match *value {
+        let glided = inner.app_onset(&length, |value, length| match *value {
             SeqValue::Voltage { volts, .. } => SeqValue::Voltage {
                 volts,
-                glide: length.to_f64().max(0.0),
+                glide: length.map_or(0.0, |length| length.to_f64().max(0.0)),
             },
             SeqValue::Rest => SeqValue::Rest,
         });
@@ -975,77 +1002,41 @@ impl SeqPatternParam {
     /// pattern wouldn't highlight.
     pub fn from_fast_payload(payload: FastPatternPayload) -> Result<Self, String> {
         let (pattern, per_source) = Self::lower_fast(payload)?;
-        Ok(Self {
-            per_source,
-            is_multi_source: true,
-            pattern: Some(pattern),
-            cached_haps: Arc::default(),
-            max_glide: 0.0,
-        })
+        Ok(Self::unbaked(pattern, per_source, true))
     }
 
     /// Build a `SeqPatternParam` from a `.struct(...)` payload. `is_multi_source`
     /// is always `true` for the highlight-key reason in [`Self::from_fast_payload`].
     pub fn from_struct_payload(payload: StructPatternPayload) -> Result<Self, String> {
         let (pattern, per_source) = Self::lower_struct(payload)?;
-        Ok(Self {
-            per_source,
-            is_multi_source: true,
-            pattern: Some(pattern),
-            cached_haps: Arc::default(),
-            max_glide: 0.0,
-        })
+        Ok(Self::unbaked(pattern, per_source, true))
     }
 
     /// Build a `SeqPatternParam` from a `.beat(...)` payload. `is_multi_source`
     /// is always `true` for the highlight-key reason in [`Self::from_fast_payload`].
     pub fn from_beat_payload(payload: BeatPatternPayload) -> Result<Self, String> {
         let (pattern, per_source) = Self::lower_beat(payload)?;
-        Ok(Self {
-            per_source,
-            is_multi_source: true,
-            pattern: Some(pattern),
-            cached_haps: Arc::default(),
-            max_glide: 0.0,
-        })
+        Ok(Self::unbaked(pattern, per_source, true))
     }
 
     /// Build a `SeqPatternParam` from a `.glide(...)` payload. `is_multi_source`
     /// is always `true` for the highlight-key reason in [`Self::from_fast_payload`].
     pub fn from_glide_payload(payload: GlidePatternPayload) -> Result<Self, String> {
         let (pattern, per_source) = Self::lower_glide(payload)?;
-        Ok(Self {
-            per_source,
-            is_multi_source: true,
-            pattern: Some(pattern),
-            cached_haps: Arc::default(),
-            max_glide: 0.0,
-        })
+        Ok(Self::unbaked(pattern, per_source, true))
     }
 
     /// Build a `SeqPatternParam` from a `.slow(...)` payload. `is_multi_source`
     /// is always `true` for the highlight-key reason in [`Self::from_fast_payload`].
     pub fn from_slow_payload(payload: SlowPatternPayload) -> Result<Self, String> {
         let (pattern, per_source) = Self::lower_slow(payload)?;
-        Ok(Self {
-            per_source,
-            is_multi_source: true,
-            pattern: Some(pattern),
-            cached_haps: Arc::default(),
-            max_glide: 0.0,
-        })
+        Ok(Self::unbaked(pattern, per_source, true))
     }
 
     #[doc(hidden)]
     pub fn from_sp_payload(payload: SpPatternPayload) -> Result<Self, String> {
         let (pattern, per_source) = Self::lower_sp(payload)?;
-        Ok(Self {
-            per_source,
-            is_multi_source: true,
-            pattern: Some(pattern),
-            cached_haps: Arc::default(),
-            max_glide: 0.0,
-        })
+        Ok(Self::unbaked(pattern, per_source, true))
     }
 
     fn lower_sp(
@@ -1159,10 +1150,7 @@ impl SeqPatternParam {
                 .iter()
                 .flat_map(|storage| &storage.haps)
                 .filter(|hap| hap.has_onset && hap.whole_begin >= offset && hap.whole_begin < end)
-                .map(|hap| match hap.value {
-                    SeqValue::Voltage { glide, .. } => glide,
-                    SeqValue::Rest => 0.0,
-                })
+                .map(|hap| hap.value.glide())
                 .fold(0.0, f64::max);
             self.cached_haps = cached_haps.into();
         }

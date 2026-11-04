@@ -61,6 +61,52 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         )
     }
 
+    /// Combine each hap of `self`, unchanged, with the `pat_val` value at its
+    /// onset: the first `pat_val` hap whose part holds the onset, or `None`
+    /// where `pat_val` is silent. Unlike [`Self::app_left`], a gap in
+    /// `pat_val` never drops a hap, and changes in `pat_val` never split one.
+    pub fn app_onset<U, V, F>(&self, pat_val: &Pattern<U>, f: F) -> Pattern<V>
+    where
+        U: Clone + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        F: Fn(&T, Option<&U>) -> V + Send + Sync + 'static,
+    {
+        let pat_fn = self.clone();
+        let pat_val = pat_val.clone();
+        let f = Arc::new(f);
+
+        Pattern::new_into(
+            move |state: &State, bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, V>>| {
+                let mut haps_fn: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+                pat_fn.query_into(state, bump, &mut haps_fn);
+
+                let mut haps_val: BumpVec<'_, ArenaHap<'_, U>> = BumpVec::new_in(bump);
+                for hap_fn in &haps_fn {
+                    let span = hap_fn.whole_or_part();
+                    let onset = &span.begin;
+                    haps_val.clear();
+                    pat_val.query_into(&State::new(span.clone()), bump, &mut haps_val);
+                    let at_onset = haps_val
+                        .iter()
+                        .find(|h| &h.part.begin <= onset && onset < &h.part.end);
+                    let (value, context) = match at_onset {
+                        Some(hap_val) => (
+                            f(&hap_fn.value, Some(&hap_val.value)),
+                            ArenaHapContext::combine_in(&hap_fn.context, &hap_val.context, bump),
+                        ),
+                        None => (f(&hap_fn.value, None), hap_fn.context),
+                    };
+                    out.push(ArenaHap {
+                        whole: hap_fn.whole.clone(),
+                        part: hap_fn.part.clone(),
+                        value,
+                        context,
+                    });
+                }
+            },
+        )
+    }
+
     /// Combine patterns using right (outer) structure.
     ///
     /// The timing structure comes from the right pattern. For each hap in the

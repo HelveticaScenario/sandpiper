@@ -24,6 +24,10 @@ fn glide(pattern: Value, length: Value) -> Value {
 }
 
 fn cycle_patch(pattern: Value, channels: Option<u64>) -> Patch {
+    cycle_patch_at(pattern, channels, 48000.0)
+}
+
+fn cycle_patch_at(pattern: Value, channels: Option<u64>, tempo: f64) -> Patch {
     let mut params = serde_json::Map::new();
     params.insert("pattern".to_string(), pattern);
     if let Some(ch) = channels {
@@ -34,7 +38,7 @@ fn cycle_patch(pattern: Value, channels: Option<u64>) -> Patch {
             (
                 "ROOT_CLOCK",
                 "_clock",
-                json!({ "tempo": 48000.0, "numerator": 4, "denominator": 4 }),
+                json!({ "tempo": tempo, "numerator": 4, "denominator": 4 }),
             ),
             ("seq", "$cycle", Value::Object(params)),
         ]
@@ -174,17 +178,7 @@ fn pattern_swap_mid_ramp_reaims_from_the_current_cv() {
     assert_near(before_swap, 0.5, "halfway before the swap");
 
     let b = cycle_patch(glide(mini("0 3"), json!(0.25)), Some(1));
-    for (id, m) in &b.sampleables {
-        if let Some(old) = a.sampleables.get(id) {
-            m.transfer_state_from(old.as_ref(), &SameIds);
-        }
-    }
-    for m in b.sampleables.values() {
-        m.connect(&b);
-    }
-    for m in b.sampleables.values() {
-        m.on_patch_update();
-    }
+    transfer_into(&b, &a);
 
     let t = trace(&b, 0, SAMPLES_PER_CYCLE / 4);
     assert!(
@@ -197,4 +191,100 @@ fn pattern_swap_mid_ramp_reaims_from_the_current_cv() {
     for i in 0..onset {
         assert!(t[i + 1].0 >= t[i].0, "re-aimed ramp rises at {i}");
     }
+}
+
+/// Replicate a live patch update: transfer state, reconnect, `on_patch_update`.
+fn transfer_into(new: &Patch, old: &Patch) {
+    for (id, m) in &new.sampleables {
+        if let Some(prev) = old.sampleables.get(id) {
+            m.transfer_state_from(prev.as_ref(), &SameIds);
+        }
+    }
+    for m in new.sampleables.values() {
+        m.connect(new);
+    }
+    for m in new.sampleables.values() {
+        m.on_patch_update();
+    }
+}
+
+#[test]
+fn a_glide_waits_for_the_notes_before_its_target() {
+    // `2` glides over half a cycle, but `1` plays on the only voice first:
+    // every note sounds, `0` holds still, and the ramp into `2` starts on `1`.
+    let patch = cycle_patch(glide(mini("0 1 2"), mini("0 0 0.5")), Some(1));
+    let t = trace(&patch, 0, SAMPLES_PER_CYCLE);
+    let on = onsets(&t);
+    assert!(on.len() >= 3, "all three notes fire: {on:?}");
+    for (i, sample) in t.iter().enumerate().take(on[1]) {
+        assert_near(sample.0, 0.0, &format!("`0` holds still at {i}"));
+    }
+    assert_near(t[on[1]].0, 1.0, "`1` lands at its onset");
+    assert_near(t[(on[1] + on[2]) / 2].0, 1.5, "halfway from `1` to `2`");
+    assert_near(t[on[2]].0, 2.0, "`2` lands at its onset");
+}
+
+#[test]
+fn glides_stay_continuous_on_a_clock_off_the_sample_grid() {
+    // About 245.1 samples per cycle, so onsets fall between samples.
+    let patch = cycle_patch_at(glide(mini("[0,2] [1,3]"), json!(0.25)), Some(2), 47000.0);
+    let mut prev = [None::<f32>; 2];
+    let mut rises = 0;
+    let mut prev_trig = [false; 2];
+    for frame in 0..4 * SAMPLES_PER_CYCLE {
+        process_frame(&patch);
+        for ch in 0..2 {
+            let cv = seq_val(&patch, "cv", ch);
+            if let Some(p) = prev[ch]
+                && frame > 2
+            {
+                assert!(
+                    (cv - p).abs() < 0.05,
+                    "channel {ch} steps from {p} to {cv} at frame {frame}"
+                );
+            }
+            prev[ch] = Some(cv);
+            let trig = seq_val(&patch, "trig", ch) > 2.5;
+            if trig && !prev_trig[ch] {
+                rises += 1;
+            }
+            prev_trig[ch] = trig;
+        }
+    }
+    assert!(rises >= 14, "every chord note fires: {rises} onsets");
+}
+
+#[test]
+fn a_ramp_cut_by_a_swap_holds_its_cv_until_the_next_onset() {
+    let a = cycle_patch(glide(mini("0 1"), json!(0.25)), Some(1));
+    let t = trace(&a, 0, SAMPLES_PER_CYCLE * 3 / 8);
+    let at_swap = t.last().unwrap().0;
+    assert_near(at_swap, 0.5, "halfway before the swap");
+
+    let b = cycle_patch(mini("0 3"), Some(1));
+    transfer_into(&b, &a);
+    let t = trace(&b, 0, SAMPLES_PER_CYCLE / 4);
+    let onset = onsets(&t)[0];
+    for (i, sample) in t.iter().enumerate().take(onset) {
+        assert_near(sample.0, at_swap, &format!("held at {i}"));
+    }
+    assert_near(t[onset].0, 3.0, "jumps to the new note at its onset");
+}
+
+#[test]
+fn a_stacked_glide_pattern_does_not_duplicate_notes() {
+    let patch = cycle_patch(glide(mini("0 1"), mini("[0, 0.25]")), Some(4));
+    let mut rises = 0;
+    let mut prev = [false; 4];
+    for _ in 0..SAMPLES_PER_CYCLE - 1 {
+        process_frame(&patch);
+        for (ch, prev) in prev.iter_mut().enumerate() {
+            let trig = seq_val(&patch, "trig", ch) > 2.5;
+            if trig && !*prev {
+                rises += 1;
+            }
+            *prev = trig;
+        }
+    }
+    assert_eq!(rises, 2, "one onset per note");
 }
