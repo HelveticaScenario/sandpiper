@@ -153,10 +153,12 @@ struct SamplerState {
     rel_active: bool,
     rel: Voice,
     rel_countdown: u32,
-    /// Whether the main voice repeats at its window edge. Set at onset when
-    /// looping, cleared for good when the gate falls or the next window is
-    /// empty, so one pass plays out.
-    loop_armed: bool,
+    /// The main pass ends at its window edge instead of repeating: always
+    /// for a one-shot, and for a loop pass once the gate falls, `loop` turns
+    /// off, or the next slice is empty. Its closing fade is set when this
+    /// becomes true. A gate still holding a loop open starts a new pass once
+    /// this one is done.
+    playing_out: bool,
     /// Whether the release voice also ramps down over `fade_out_samples`.
     /// A loop-seam release fades by its span ramp alone, which mirrors the
     /// new pass's fade-in so the two sum to unity.
@@ -224,28 +226,23 @@ impl Sampler {
                 self.state.rel_active = true;
             }
             let (lo, hi) = self.window(frame_count, max_frame);
-            self.state.win_lo = lo;
-            self.state.win_hi = hi;
-            // Reverse playback enters through the window's far edge: the same
-            // audible region, played backwards.
-            self.state.main = Voice {
-                position: if speed < 0.0 { hi } else { lo },
-                lo,
-                hi,
-                lo_ramp: w,
-                hi_ramp: w,
-                wrap_reads: hi > max_frame,
-            };
-            self.state.playing = true;
-            self.state.loop_armed = self.params.looping;
+            self.start_pass(lo, hi, speed, max_frame);
         }
 
-        if self.state.loop_armed && self.state.playing {
-            if gate_high && self.params.looping {
+        let holding = self.params.looping && gate_high;
+        if self.state.playing && !self.state.playing_out {
+            if holding {
                 self.loop_seam(advance, frame_count, max_frame);
             } else {
-                self.state.loop_armed = false;
+                self.state.playing_out = true;
                 self.end_loop(advance, max_frame);
+            }
+        } else if holding && !self.state.playing {
+            // An empty slice has nothing to play; the loop picks up as soon
+            // as the slice signal selects one that does.
+            let (lo, hi) = self.window(frame_count, max_frame);
+            if hi > lo {
+                self.start_pass(lo, hi, speed, max_frame);
             }
         }
 
@@ -308,6 +305,25 @@ impl Sampler {
         }
     }
 
+    /// Start a fresh main pass over `[lo, hi]` with onset fades at both
+    /// edges. Reverse playback enters through the window's far edge: the same
+    /// audible region, played backwards.
+    fn start_pass(&mut self, lo: f64, hi: f64, speed: f64, max_frame: f64) {
+        let w = self.state.fade_frames;
+        self.state.win_lo = lo;
+        self.state.win_hi = hi;
+        self.state.main = Voice {
+            position: if speed < 0.0 { hi } else { lo },
+            lo,
+            hi,
+            lo_ramp: w,
+            hi_ramp: w,
+            wrap_reads: hi > max_frame,
+        };
+        self.state.playing = true;
+        self.state.playing_out = !self.params.looping;
+    }
+
     /// The playback window in WAV frames for the slice signal's current
     /// value, or the whole file without a slice.
     fn window(&self, frame_count: usize, max_frame: f64) -> (f64, f64) {
@@ -363,7 +379,7 @@ impl Sampler {
         let (next_lo, next_hi) = self.window(frame_count, max_frame);
         let next_span = next_hi - next_lo;
         if next_span <= 0.0 {
-            self.state.loop_armed = false;
+            self.state.playing_out = true;
             self.end_loop(advance, max_frame);
             return;
         }
@@ -422,7 +438,7 @@ impl Sampler {
         self.state.win_hi = next_hi;
     }
 
-    /// When the loop ends, its current pass plays out with the full fade at
+    /// When a loop pass stops repeating, it plays out with the full fade at
     /// the edge it is heading for. Its gain on that side is unity (a seam
     /// ramp hands over to the release voice as soon as it starts),
     /// so the ramp starts at the current position at the latest; when the
@@ -1293,7 +1309,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_next_slice_ends_the_loop_with_a_fade() {
+    fn empty_slice_silences_the_loop_until_a_slice_is_selected() {
         let mut sampler = mid_slice_loop(vec![0.2; 4800], json!({}));
         // Slice 1 of [0.1, 0.2, 0.2] is empty.
         run(&mut sampler, 100);
@@ -1308,7 +1324,17 @@ mod tests {
             prev = v;
         }
         assert!(!sampler.state.playing);
-        assert!(!sampler.state.loop_armed);
+        // Selecting a non-empty slice again resumes looping without a new
+        // gate, fading in from silence.
+        set_slice(&mut sampler, &[0.1, 0.2, 0.2], 0.0);
+        let out = run(&mut sampler, 1000);
+        assert!(sampler.state.playing);
+        assert!(out[0].abs() < 1e-6, "pass must fade in, got {}", out[0]);
+        assert!(
+            (out[500] - 1.0).abs() < 1e-3,
+            "expected ~1.0, got {}",
+            out[500]
+        );
     }
 
     #[test]
@@ -1404,5 +1430,81 @@ mod tests {
             sampler.state.rel_countdown,
             sampler.state.fade_out_samples - 1
         );
+    }
+
+    #[test]
+    fn held_loop_never_stays_silent_under_live_changes() {
+        // Sweep speed (through and near zero, both directions), the slice
+        // signal (onto empty and unsorted slices), the slice param itself,
+        // `loop`, and the fade, with the gate held. Whenever `loop` is on and
+        // the selected slice is non-empty, the sampler must be playing
+        // within a sample, and the output must stay finite.
+        let wav: Vec<f32> = (0..4800).map(|i| ((i as f32) * 0.05).sin() * 0.5).collect();
+        let mut seed: u64 = 0x1234_5678;
+        let mut rnd = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mono = |v: f32| MonoSignal::from_poly(PolySignal::mono(Signal::Volts(v)));
+        for trial in 0..60 {
+            let mut sampler = mid_slice_loop(wav.clone(), json!({ "fade": 5.0 }));
+            let frame_count = 4800;
+            let max_frame = 4799.0;
+            for step in 0..300 {
+                let r = rnd();
+                if r < 0.3 {
+                    let v = match (rnd() * 5.0) as u32 {
+                        0 => 0.0,
+                        1 => (rnd() - 0.5) * 1e-4,
+                        _ => (rnd() - 0.5) * 8.0,
+                    } as f32;
+                    sampler.params.speed = Some(mono(v));
+                } else if r < 0.6 {
+                    if sampler.params.slice.is_some() {
+                        set_slice_signal(&mut sampler, ((rnd() - 0.3) * 8.0) as f32);
+                    }
+                } else if r < 0.75 {
+                    sampler.params.slice = if sampler.params.slice.is_some() {
+                        None
+                    } else {
+                        let points = match (rnd() * 3.0) as u32 {
+                            0 => vec![0.0, 0.25, 0.5, 0.75],
+                            1 => vec![0.1, 0.2, 0.2],
+                            _ => vec![0.6, 0.3, 0.9],
+                        };
+                        Some(SliceParam {
+                            points,
+                            signal: mono((rnd() * 4.0) as f32),
+                        })
+                    };
+                } else if r < 0.85 {
+                    sampler.params.looping = !sampler.params.looping;
+                } else {
+                    sampler.params.fade = rnd() * 20.0;
+                    sampler.on_patch_update();
+                }
+                let mut silent_run = 0;
+                for _ in 0..(rnd() * 3000.0) as usize + 1 {
+                    sampler.update(SAMPLE_RATE);
+                    let v = sampler.outputs.sample.get(0);
+                    assert!(
+                        v.is_finite(),
+                        "trial {trial} step {step}: non-finite output"
+                    );
+                    let (lo, hi) = sampler.window(frame_count, max_frame);
+                    if sampler.params.looping && hi > lo && !sampler.state.playing {
+                        silent_run += 1;
+                        assert!(
+                            silent_run <= 1,
+                            "trial {trial} step {step}: held loop stopped over a non-empty slice"
+                        );
+                    } else {
+                        silent_run = 0;
+                    }
+                }
+            }
+        }
     }
 }
