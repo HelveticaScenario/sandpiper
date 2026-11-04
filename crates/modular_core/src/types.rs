@@ -1088,6 +1088,14 @@ impl SampleBuffer {
         hermite_clamped(self.channel(channel), frame)
     }
 
+    /// Hermite read treating the buffer as a ring: the position and its
+    /// neighbours wrap modulo the frame count (for looped playback).
+    /// Allocation-free; safe for the audio thread.
+    #[inline]
+    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
+        hermite_wrapped(self.channel(channel), frame)
+    }
+
     /// One channel's samples; empty for a channel the buffer does not have.
     #[inline]
     pub fn channel(&self, channel: usize) -> &[f32] {
@@ -1132,6 +1140,31 @@ impl SampleBuffer {
         // matches the forward read of the same frames.
         hermite4(y0, y1, y2, y3, frac)
     }
+}
+
+/// Hermite (4-point cubic) read of `samples` as a ring of `len` frames: the
+/// position and its neighbours wrap, so the last frame interpolates into the
+/// first.
+#[inline]
+pub fn hermite_wrapped(samples: &[f32], frame: f32) -> f32 {
+    let n = samples.len();
+    if !frame.is_finite() || n == 0 {
+        return 0.0;
+    }
+    let frame = frame.rem_euclid(n as f32);
+    // rem_euclid can round up to exactly n for tiny negative inputs.
+    let left = (frame.floor() as usize).min(n - 1);
+    let frac = frame - left as f32;
+    if frac <= f32::EPSILON {
+        return samples[left];
+    }
+    hermite4(
+        samples[(left + n - 1) % n],
+        samples[left],
+        samples[(left + 1) % n],
+        samples[(left + 2) % n],
+        frac,
+    )
 }
 
 /// Hermite (4-point cubic) read of `samples` at a fractional frame position,
@@ -1222,6 +1255,12 @@ impl WavData {
         self.buffer.read_hermite_clamped(channel, frame)
     }
 
+    /// Hermite-interpolated read wrapping around the file (for looping).
+    #[inline]
+    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
+        self.buffer.read_hermite_wrapped(channel, frame)
+    }
+
     /// One channel's samples; empty for a channel the file does not have.
     #[inline]
     pub fn channel(&self, channel: usize) -> &[f32] {
@@ -1296,6 +1335,13 @@ impl Wav {
         self.cached_data
             .as_ref()
             .map(|d| d.read_hermite_clamped(channel, frame))
+            .unwrap_or(0.0)
+    }
+
+    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
+        self.cached_data
+            .as_ref()
+            .map(|d| d.read_hermite_wrapped(channel, frame))
             .unwrap_or(0.0)
     }
 

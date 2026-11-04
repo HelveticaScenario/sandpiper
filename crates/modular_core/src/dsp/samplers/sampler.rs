@@ -27,7 +27,8 @@ const MAX_FADE_MS: f64 = 1000.0;
 #[deserr(rename_all = camelCase, deny_unknown_fields, validate = sampler_validate_params -> ModuleParamErrors)]
 struct SamplerParams {
     wav: Wav,
-    /// Gate input — rising edge starts playback from the beginning.
+    /// Gate input — rising edge starts playback from the beginning; with
+    /// `loop`, holding it high keeps the window repeating.
     #[signal(type = gate, range = (0.0, 5.0))]
     gate: MonoSignal,
     /// Playback speed. 1.0 = normal, 2.0 = double speed, negative = reverse.
@@ -36,8 +37,9 @@ struct SamplerParams {
     speed: Option<MonoSignal>,
     /// Slice selector: a mono signal (whole file as one slice) or
     /// `[points, signal]` where points are fractions of the total length in
-    /// [0, 1]. Sampled once per gate rising edge: the integer part picks the
-    /// slice (wrapping), the fraction offsets the start into it.
+    /// [0, 1]. Sampled at each gate rising edge and each loop repeat: the
+    /// integer part picks the slice (wrapping), the fraction offsets the
+    /// start into it.
     #[deserr(default)]
     slice: Option<SliceParam>,
     /// Declick fade in milliseconds: fade-in at onset, fade-out at the window
@@ -45,6 +47,15 @@ struct SamplerParams {
     #[serde(default = "default_fade")]
     #[deserr(default = default_fade())]
     fade: f64,
+    /// Repeat while the gate is high (default false): each time a pass
+    /// reaches its window's end, the slice is picked again and the next pass
+    /// starts on time, so passes never drift. With a fade, the crossfade
+    /// uses the audio just before the next window (after it in reverse),
+    /// topped up by letting the old pass run on past its end. When the gate
+    /// falls or the next slice is empty, the current pass plays out.
+    #[serde(default, rename = "loop")]
+    #[deserr(default, rename = "loop")]
+    looping: bool,
 }
 
 fn sampler_validate_params(
@@ -69,9 +80,56 @@ struct SamplerOutputs {
     sample: PolyOutput,
 }
 
+/// One playback head: a position, the span it may sound in, and a declick
+/// ramp at each end of that span.
+#[derive(Clone, Copy, Default)]
+struct Voice {
+    position: f64,
+    /// The voice ends once its position leaves `[lo, hi]`.
+    lo: f64,
+    hi: f64,
+    /// Gain rises linearly from 0 at an edge to 1 this many frames inside
+    /// it. Position-based, so the ramps are symmetric under reverse and
+    /// fade time scales with |speed|; 0 is a hard edge.
+    lo_ramp: f64,
+    hi_ramp: f64,
+    /// Reads wrap around the file end, so the last frame runs on into the
+    /// first. Set for loops whose window reaches the end of the file.
+    wrap_reads: bool,
+}
+
+impl Voice {
+    /// NaN comparisons are false, so a non-finite position counts as
+    /// outside — a voice can always end.
+    fn in_span(&self) -> bool {
+        self.position >= self.lo && self.position <= self.hi
+    }
+
+    /// Spans shorter than their two ramps peak below unity.
+    fn gain(&self) -> f32 {
+        let ramp = |d: f64, r: f64| {
+            if r > 0.0 {
+                (d / r).clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        };
+        ramp(self.position - self.lo, self.lo_ramp).min(ramp(self.hi - self.position, self.hi_ramp))
+            as f32
+    }
+
+    fn read(&self, wav: &Wav, ch: usize) -> f32 {
+        if self.wrap_reads {
+            wav.read_hermite_wrapped(ch, self.position as f32)
+        } else {
+            wav.read_hermite_clamped(ch, self.position as f32)
+        }
+    }
+}
+
 #[derive(Default)]
 struct SamplerState {
-    position: f64,
+    main: Voice,
     playing: bool,
     gate_trigger: SchmittTrigger,
     /// Engine sample rate, captured in init.
@@ -84,19 +142,25 @@ struct SamplerState {
     /// playing voice keeps its trigger-time window across patch updates.
     win_lo: f64,
     win_hi: f64,
-    /// Declick ramp half-width in WAV frames (fade seconds × wav rate).
+    /// Declick ramp width in WAV frames (fade seconds × wav rate).
     /// Param+wav-derived, so computed in on_patch_update; 0 disables fades.
     fade_frames: f64,
     /// Retrigger release-voice ramp length in output samples (fade seconds ×
     /// engine rate). Param-derived, so computed in on_patch_update.
     fade_out_samples: u32,
-    /// Release voice: on retrigger the previous playback keeps sounding at a
-    /// fading gain so the jump to the new onset doesn't click.
+    /// Release voice: on a retrigger or a loop seam the previous playback
+    /// keeps sounding at a fading gain so the jump doesn't click.
     rel_active: bool,
-    rel_position: f64,
-    rel_win_lo: f64,
-    rel_win_hi: f64,
+    rel: Voice,
     rel_countdown: u32,
+    /// Whether the main voice repeats at its window edge. Set at onset when
+    /// looping, cleared for good when the gate falls or the next window is
+    /// empty, so one pass plays out.
+    loop_armed: bool,
+    /// Whether the release voice also ramps down over `fade_out_samples`.
+    /// A loop-seam release fades by its span ramp alone, which mirrors the
+    /// new pass's fade-in so the two sum to unity.
+    rel_timed: bool,
 }
 
 /// One-shot sample player. Each gate rising edge starts playback of the whole
@@ -104,12 +168,14 @@ struct SamplerState {
 /// the edge — integer part picks the slice point (wrapping), fraction offsets
 /// the start into it. Speed control allows pitch-shifting and reverse
 /// playback (a slice plays the same region backwards). A short `fade`
-/// (milliseconds) declicks onsets, slice ends, and retriggers.
+/// (milliseconds) declicks onsets, slice ends, and retriggers. With `loop`,
+/// the window repeats for as long as the gate stays high.
 ///
 /// ```js
 /// $sampler($wavs().kick, $pulse('4hz'))
 /// $sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })
 /// $sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })
+/// $sampler($wavs().pad, $pulse('0.5hz'), { loop: true, fade: 10 })
 /// ```
 #[module(name = "$sampler", channels_derive = sampler_derive_channel_count, args(wav, gate), has_init, patch_update)]
 pub struct Sampler {
@@ -126,27 +192,6 @@ impl Sampler {
         self.state.sample_rate = sample_rate;
     }
 
-    /// Distance-to-edge declick gain: ramps linearly from 0 at either window
-    /// edge to 1 a full ramp-width inside it. Position-based, so it is
-    /// stateless, symmetric under reverse, and robust to live speed changes
-    /// (fade time scales with |speed|). Windows shorter than two ramp widths
-    /// peak below unity. `w == 0` (fade disabled) is unity.
-    fn edge_gain(position: f64, lo: f64, hi: f64, w: f64) -> f32 {
-        if w > 0.0 {
-            let d = (position - lo).min(hi - position);
-            (d / w).clamp(0.0, 1.0) as f32
-        } else {
-            1.0
-        }
-    }
-
-    /// Whether a voice's position is inside its playback window. NaN
-    /// comparisons are false, so a non-finite position counts as outside —
-    /// a voice can always leave the playing state.
-    fn in_window(position: f64, lo: f64, hi: f64) -> bool {
-        position >= lo && position <= hi
-    }
-
     fn update(&mut self, _sample_rate: f32) {
         let channels = self.channel_count();
         let frame_count = self.params.wav.frame_count();
@@ -158,100 +203,77 @@ impl Sampler {
             return;
         }
         let max_frame = (frame_count - 1) as f64;
+        let w = self.state.fade_frames;
 
-        // Detect gate rising edge
         let gate_val = self.params.gate.get_value();
-        if self.state.gate_trigger.process(gate_val) {
-            let speed = self.params.speed.value_or(1.0) as f64;
+        let (gate_high, edge) = self.state.gate_trigger.process_with_edge(gate_val);
+        let speed = self.params.speed.value_or(1.0) as f64;
+        let advance = speed * self.state.rate_ratio;
+        if edge.is_rising() {
             // Demote the current voice to the release voice so the jump to
             // the new onset crossfades instead of clicking. A retrigger
             // during an active release simply steals the slot. `playing`
-            // lags the position by one sample (the window-exit check runs
+            // lags the position by one sample (the span-exit check runs
             // after edge detection), so also require the position to still
-            // be in the window: an exited voice is silent and must not
+            // be in the span: an exited voice is silent and must not
             // displace a live release.
-            if self.state.playing
-                && Self::in_window(self.state.position, self.state.win_lo, self.state.win_hi)
-                && self.state.fade_out_samples > 0
-            {
-                self.state.rel_position = self.state.position;
-                self.state.rel_win_lo = self.state.win_lo;
-                self.state.rel_win_hi = self.state.win_hi;
+            if self.state.playing && self.state.main.in_span() && self.state.fade_out_samples > 0 {
+                self.state.rel = self.state.main;
                 self.state.rel_countdown = self.state.fade_out_samples;
+                self.state.rel_timed = true;
                 self.state.rel_active = true;
             }
-            let (lo, hi) = match &self.params.slice {
-                Some(slice) => {
-                    // Sample-and-hold the slice signal at the edge. A cable
-                    // can carry non-finite values; fall back to the first
-                    // slice so the window and position stay finite.
-                    let s = slice.signal.get_value_f64();
-                    let s = if s.is_finite() { s } else { 0.0 };
-                    let n = slice.points.len();
-                    let idx = (s.floor() as i64).rem_euclid(n as i64) as usize;
-                    let frac = s - s.floor();
-                    let start_p = slice.points[idx];
-                    // Slice ends at the next point, or the end of the file
-                    // for the last one; an unsorted successor clamps to a
-                    // zero-length slice.
-                    let end_p = if idx + 1 < n {
-                        slice.points[idx + 1]
-                    } else {
-                        1.0
-                    };
-                    let end_p = end_p.clamp(0.0, 1.0).max(start_p);
-                    let slice_lo = (start_p * frame_count as f64).min(max_frame);
-                    let slice_hi = (end_p * frame_count as f64).min(max_frame);
-                    (slice_lo + frac * (slice_hi - slice_lo), slice_hi)
-                }
-                None => (0.0, max_frame),
-            };
+            let (lo, hi) = self.window(frame_count, max_frame);
             self.state.win_lo = lo;
             self.state.win_hi = hi;
             // Reverse playback enters through the window's far edge: the same
             // audible region, played backwards.
-            self.state.position = if speed < 0.0 { hi } else { lo };
+            self.state.main = Voice {
+                position: if speed < 0.0 { hi } else { lo },
+                lo,
+                hi,
+                lo_ramp: w,
+                hi_ramp: w,
+                wrap_reads: hi > max_frame,
+            };
             self.state.playing = true;
+            self.state.loop_armed = self.params.looping;
         }
 
-        let speed = self.params.speed.value_or(1.0) as f64;
-        let advance = speed * self.state.rate_ratio;
-        let w = self.state.fade_frames;
+        if self.state.loop_armed && self.state.playing {
+            if gate_high && self.params.looping {
+                self.loop_seam(advance, frame_count, max_frame);
+            } else {
+                self.state.loop_armed = false;
+                self.end_loop(advance, max_frame);
+            }
+        }
 
         let mut main_gain = 0.0;
         if self.state.playing {
-            if !Self::in_window(self.state.position, self.state.win_lo, self.state.win_hi) {
-                self.state.playing = false;
+            if self.state.main.in_span() {
+                main_gain = self.state.main.gain();
             } else {
-                main_gain =
-                    Self::edge_gain(self.state.position, self.state.win_lo, self.state.win_hi, w);
+                self.state.playing = false;
             }
         }
 
         let mut rel_gain = 0.0;
         if self.state.rel_active {
-            if self.state.rel_countdown == 0
-                || !Self::in_window(
-                    self.state.rel_position,
-                    self.state.rel_win_lo,
-                    self.state.rel_win_hi,
-                )
+            if (self.state.rel_timed && self.state.rel_countdown == 0) || !self.state.rel.in_span()
             {
                 self.state.rel_active = false;
             } else {
-                let pg = Self::edge_gain(
-                    self.state.rel_position,
-                    self.state.rel_win_lo,
-                    self.state.rel_win_hi,
-                    w,
-                );
                 // Time-based ramp-down bounds the ring-out to the fade time
                 // regardless of speed; clamped because a patch update can
                 // shrink fade_out_samples mid-release.
-                let t = (self.state.rel_countdown as f64
-                    / self.state.fade_out_samples.max(1) as f64)
-                    .min(1.0) as f32;
-                rel_gain = pg * t;
+                let t = if self.state.rel_timed {
+                    (self.state.rel_countdown as f64 / self.state.fade_out_samples.max(1) as f64)
+                        .min(1.0) as f32
+                } else {
+                    1.0
+                };
+                rel_gain = self.state.rel.gain() * t;
             }
         }
 
@@ -262,17 +284,15 @@ impl Sampler {
             return;
         }
 
-        // Read with Hermite interpolation
-        let pos = self.state.position as f32;
-        let rel_pos = self.state.rel_position as f32;
+        let wav = &self.params.wav;
         for ch in 0..channels {
             let mut value = 0.0;
             if self.state.playing {
                 // Expected range of wav is -1.0 to 1.0, multiply by 5 to get to oscillator level
-                value += self.params.wav.read_hermite_clamped(ch, pos) * 5.0 * main_gain;
+                value += self.state.main.read(wav, ch) * 5.0 * main_gain;
             }
             if self.state.rel_active {
-                value += self.params.wav.read_hermite_clamped(ch, rel_pos) * 5.0 * rel_gain;
+                value += self.state.rel.read(wav, ch) * 5.0 * rel_gain;
             }
             self.outputs.sample.set(ch, value);
         }
@@ -280,11 +300,156 @@ impl Sampler {
         // Advance positions, compensating for sample rate difference (ratio
         // resolved in on_patch_update).
         if self.state.playing {
-            self.state.position += advance;
+            self.state.main.position += advance;
         }
         if self.state.rel_active {
-            self.state.rel_position += advance;
-            self.state.rel_countdown -= 1;
+            self.state.rel.position += advance;
+            self.state.rel_countdown = self.state.rel_countdown.saturating_sub(1);
+        }
+    }
+
+    /// The playback window in WAV frames for the slice signal's current
+    /// value, or the whole file without a slice.
+    fn window(&self, frame_count: usize, max_frame: f64) -> (f64, f64) {
+        match &self.params.slice {
+            Some(slice) => {
+                // A cable can carry non-finite values; fall back to the first
+                // slice so the window and position stay finite.
+                let s = slice.signal.get_value_f64();
+                let s = if s.is_finite() { s } else { 0.0 };
+                let n = slice.points.len();
+                let idx = (s.floor() as i64).rem_euclid(n as i64) as usize;
+                let frac = s - s.floor();
+                let start_p = slice.points[idx];
+                // Slice ends at the next point, or the end of the file for
+                // the last one; an unsorted successor clamps to a zero-length
+                // slice.
+                let end_p = if idx + 1 < n {
+                    slice.points[idx + 1]
+                } else {
+                    1.0
+                };
+                let end_p = end_p.clamp(0.0, 1.0).max(start_p);
+                let slice_lo = (start_p * frame_count as f64).min(max_frame);
+                let slice_hi = end_p * frame_count as f64;
+                // A looping window ends exactly where the next slice (or the
+                // file) begins, so the repeat period is the slice length.
+                let slice_hi = if self.params.looping {
+                    slice_hi
+                } else {
+                    slice_hi.min(max_frame)
+                };
+                (slice_lo + frac * (slice_hi - slice_lo), slice_hi)
+            }
+            None if self.params.looping => (0.0, frame_count as f64),
+            None => (0.0, max_frame),
+        }
+    }
+
+    /// Repeat at the window edge the main voice is heading for. The next
+    /// pass enters the next window exactly when the old pass reaches the
+    /// edge, so the period is the window length. Around that instant they
+    /// crossfade: the next pass fades in over `pre` frames of audio outside
+    /// the next window's entry edge, and the old pass, as the release voice,
+    /// fades out over the same frames plus `post` frames run on past its
+    /// edge. The two ramps sum to unity. Each side is capped by the audio the
+    /// file has there and by half of either window, so a crossfade always
+    /// ends before the next seam.
+    fn loop_seam(&mut self, advance: f64, frame_count: usize, max_frame: f64) {
+        let (lo, hi) = (self.state.win_lo, self.state.win_hi);
+        if hi <= lo || advance == 0.0 {
+            return;
+        }
+        let (next_lo, next_hi) = self.window(frame_count, max_frame);
+        let next_span = next_hi - next_lo;
+        if next_span <= 0.0 {
+            self.state.loop_armed = false;
+            self.end_loop(advance, max_frame);
+            return;
+        }
+        let forward = advance > 0.0;
+        let w = self.state.fade_frames;
+        let cap = w.min((hi - lo).min(next_span) * 0.5);
+        let main = &mut self.state.main;
+        let (pre_room, post_room) = match (forward, main.wrap_reads) {
+            (true, true) => (next_lo, f64::INFINITY),
+            (true, false) => (next_lo, max_frame - hi),
+            (false, true) => (0.0, f64::INFINITY),
+            (false, false) => ((max_frame - next_hi).max(0.0), lo),
+        };
+        let pre = cap.min(pre_room);
+        let post = (cap - pre).min(post_room.max(0.0));
+        let xfade = pre + post;
+        let p = main.position;
+        let next = if forward {
+            main.hi_ramp = pre;
+            if p < hi - pre {
+                return;
+            }
+            main.hi += post;
+            main.hi_ramp = xfade;
+            Voice {
+                position: next_lo - pre + (p - (hi - pre)).rem_euclid(next_span),
+                lo: next_lo - pre,
+                hi: next_hi,
+                lo_ramp: xfade,
+                hi_ramp: w,
+                wrap_reads: next_hi > max_frame,
+            }
+        } else {
+            main.lo_ramp = pre;
+            if p >= lo + pre {
+                return;
+            }
+            main.lo -= post;
+            main.lo_ramp = xfade;
+            Voice {
+                position: next_hi + pre - (lo + pre - p).rem_euclid(next_span),
+                lo: next_lo,
+                hi: next_hi + pre,
+                lo_ramp: w,
+                hi_ramp: xfade,
+                wrap_reads: next_hi > max_frame,
+            }
+        };
+        if xfade > 0.0 {
+            self.state.rel = *main;
+            self.state.rel_timed = false;
+            self.state.rel_active = true;
+        }
+        self.state.main = next;
+        self.state.win_lo = next_lo;
+        self.state.win_hi = next_hi;
+    }
+
+    /// When the loop ends, its current pass plays out with the full fade at
+    /// the edge it is heading for. Its gain on that side is unity (a seam
+    /// ramp hands over to the release voice as soon as it starts),
+    /// so the ramp starts at the current position at the latest; when the
+    /// edge is closer than a fade width, the voice runs past it into the
+    /// audio that follows, as far as the file allows.
+    fn end_loop(&mut self, advance: f64, max_frame: f64) {
+        let w = self.state.fade_frames;
+        let main = &mut self.state.main;
+        let p = main.position;
+        if advance >= 0.0 {
+            let limit = if main.wrap_reads {
+                f64::INFINITY
+            } else {
+                max_frame
+            };
+            let end = main.hi.max((p + w).min(limit));
+            main.hi_ramp = end - (end - w).max(p);
+            main.hi = end;
+        } else {
+            let limit = if main.wrap_reads {
+                f64::NEG_INFINITY
+            } else {
+                0.0
+            };
+            let end = main.lo.min((p - w).max(limit));
+            main.lo_ramp = (end + w).min(p) - end;
+            main.lo = end;
         }
     }
 }
@@ -884,7 +1049,7 @@ mod tests {
         set_gate(&mut sampler, 0.0);
         sampler.update(SAMPLE_RATE);
         assert!(
-            sampler.state.playing && sampler.state.position > sampler.state.win_hi,
+            sampler.state.playing && sampler.state.main.position > sampler.state.main.hi,
             "setup must reach the stale-playing sample"
         );
         set_gate(&mut sampler, 5.0);
@@ -892,15 +1057,321 @@ mod tests {
         // A's release keeps fading; the dead voice B never takes the slot.
         assert!(sampler.state.rel_active, "release voice must keep fading");
         assert!(
-            sampler.state.rel_position > 100.0,
+            sampler.state.rel.position > 100.0,
             "release slot must still hold the long voice, got position {}",
-            sampler.state.rel_position
+            sampler.state.rel.position
         );
         let v = sampler.outputs.sample.get(0);
         assert!(
             v > 0.3,
             "release must stay audible across the edge, got {v}"
         );
+    }
+
+    // === looping ===
+
+    fn run(sampler: &mut Sampler, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|_| {
+                sampler.update(SAMPLE_RATE);
+                sampler.outputs.sample.get(0)
+            })
+            .collect()
+    }
+
+    fn assert_close(got: &[f32], want: &[f32]) {
+        assert_eq!(got.len(), want.len());
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+            assert!((g - w).abs() < 1e-4, "sample {i}: expected {w}, got {g}");
+        }
+    }
+
+    #[test]
+    fn loop_repeats_whole_file_with_exact_period() {
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
+        let mut sampler = make_direct(
+            params_with(json!({ "gate": 5.0, "fade": 0.0, "loop": true })),
+            wav_data,
+        );
+        let out = run(&mut sampler, 12);
+        assert_close(&out, &[1.0, 2.0, 3.0, 4.0].repeat(3));
+    }
+
+    #[test]
+    fn loop_repeats_selected_slice() {
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
+        let mut sampler = make_direct(
+            params_with(
+                json!({ "gate": 5.0, "fade": 0.0, "loop": true, "slice": [[0.0, 0.5], 0.0] }),
+            ),
+            wav_data,
+        );
+        let out = run(&mut sampler, 6);
+        assert_close(&out, &[1.0, 2.0, 1.0, 2.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn loop_repeats_in_reverse() {
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
+        let mut sampler = make_direct(
+            params_with(json!({ "gate": 5.0, "speed": -1.0, "fade": 0.0, "loop": true })),
+            wav_data,
+        );
+        // Reverse enters at the window end, one past the last frame, which
+        // reads the file start; every pass is exactly four frames.
+        let out = run(&mut sampler, 9);
+        assert_close(&out, &[1.0, 4.0, 3.0, 2.0, 1.0, 4.0, 3.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn loop_plays_out_and_stops_when_gate_falls() {
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
+        let mut sampler = make_direct(
+            params_with(json!({ "gate": 5.0, "fade": 0.0, "loop": true })),
+            wav_data,
+        );
+        let out = run(&mut sampler, 5);
+        assert_close(&out, &[1.0, 2.0, 3.0, 4.0, 1.0]);
+        set_gate(&mut sampler, 0.0);
+        // The current pass finishes (the window end reads on into the file
+        // start), then the voice stops instead of wrapping.
+        let out = run(&mut sampler, 6);
+        assert_close(&out, &[2.0, 3.0, 4.0, 1.0, 0.0, 0.0]);
+        assert!(!sampler.state.playing);
+    }
+
+    /// 4800 frames; slice 0 of `[0.1, 0.2]` is the window [480, 960], with
+    /// audio on both sides of it for the seam crossfade (48 frames at 1 ms).
+    fn mid_slice_loop(wav: Vec<f32>, extra: serde_json::Value) -> Sampler {
+        let mut params =
+            json!({ "gate": 5.0, "fade": 1.0, "loop": true, "slice": [[0.1, 0.2], 0.0] });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        make_direct(params_with(params), make_test_wav(vec![wav]))
+    }
+
+    #[test]
+    fn loop_seam_crossfade_holds_unity_on_constant_signal() {
+        for speed in [1.0, 1.37, -1.0, -1.37] {
+            let mut sampler = mid_slice_loop(vec![0.2; 4800], json!({ "speed": speed }));
+            // Past the onset ramp, a constant wav stays at unity through
+            // several seams.
+            let out = run(&mut sampler, 3000);
+            for (i, &v) in out.iter().enumerate().skip(48) {
+                assert!(
+                    (v - 1.0).abs() < 1e-3,
+                    "speed {speed}, sample {i}: expected ~1.0, got {v}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn loop_period_is_exact_with_a_crossfade() {
+        // Distinct values per frame: outside each seam crossfade the output is
+        // exactly the window frame `k mod 480` samples in, on every pass.
+        let wav: Vec<f32> = (0..4800).map(|i| (i % 1000) as f32 / 1000.0).collect();
+        let mut sampler = mid_slice_loop(wav.clone(), json!({}));
+        let out = run(&mut sampler, 480 * 6);
+        for (k, &v) in out.iter().enumerate().skip(480) {
+            let phase = k % 480;
+            if phase < 480 - 48 {
+                let want = wav[480 + phase] * 5.0;
+                assert!(
+                    (v - want).abs() < 1e-4,
+                    "sample {k}: expected {want}, got {v}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn loop_seam_fades_in_audio_from_before_the_window() {
+        let wav: Vec<f32> = (0..4800).map(|i| (i % 1000) as f32 / 1000.0).collect();
+        let mut sampler = mid_slice_loop(wav.clone(), json!({}));
+        // Halfway through the first seam (sample 456), the tail (frame 936)
+        // and the audio 24 frames before the window (frame 456) sound at half
+        // gain each.
+        let out = run(&mut sampler, 457);
+        let want = (wav[936] + wav[456]) * 0.5 * 5.0;
+        assert!(
+            (out[456] - want).abs() < 1e-4,
+            "expected {want}, got {}",
+            out[456]
+        );
+    }
+
+    #[test]
+    fn whole_file_loop_is_a_seamless_ring() {
+        // No audio precedes the file start, so the old pass runs on past the
+        // end; reads wrap, so the overlap is the head itself and the output
+        // is the file repeating sample for sample.
+        let wav: Vec<f32> = (0..480).map(|i| i as f32 / 480.0).collect();
+        let mut sampler = make_direct(
+            params_with(json!({ "gate": 5.0, "fade": 1.0, "loop": true })),
+            make_test_wav(vec![wav.clone()]),
+        );
+        let out = run(&mut sampler, 480 * 4);
+        for (k, &v) in out.iter().enumerate().skip(48) {
+            let want = wav[k % 480] * 5.0;
+            assert!(
+                (v - want).abs() < 1e-4,
+                "sample {k}: expected {want}, got {v}"
+            );
+        }
+    }
+
+    /// Ramp wav whose frame values are all distinct within the file.
+    fn ramp_wav() -> Vec<f32> {
+        (0..4800).map(|i| i as f32 / 4800.0).collect()
+    }
+
+    fn set_slice(sampler: &mut Sampler, points: &[f64], volts: f32) {
+        let slice = sampler.params.slice.as_mut().unwrap();
+        slice.points = points.to_vec();
+        slice.signal = MonoSignal::from_poly(PolySignal::mono(Signal::Volts(volts)));
+    }
+
+    #[test]
+    fn slice_change_takes_effect_at_the_loop_point() {
+        let wav = ramp_wav();
+        let mut sampler = mid_slice_loop(wav.clone(), json!({}));
+        // Window [480, 960]; switch to slice 1, [960, 1440], mid-pass.
+        let out = run(&mut sampler, 200);
+        set_slice(&mut sampler, &[0.1, 0.2, 0.3], 1.0);
+        let out: Vec<f32> = out.into_iter().chain(run(&mut sampler, 1000)).collect();
+        // The current pass is untouched until its crossfade starts.
+        for k in 48..432 {
+            let want = wav[480 + k] * 5.0;
+            assert!(
+                (out[k] - want).abs() < 1e-4,
+                "sample {k}: expected {want}, got {}",
+                out[k]
+            );
+        }
+        // The next pass is on time: it reaches 960 at sample 480.
+        for k in 480..912 {
+            let want = wav[960 + k - 480] * 5.0;
+            assert!(
+                (out[k] - want).abs() < 1e-4,
+                "sample {k}: expected {want}, got {}",
+                out[k]
+            );
+        }
+    }
+
+    #[test]
+    fn seam_runs_on_past_the_end_when_the_next_window_starts_the_file() {
+        // From [480, 960] to [0, 480]: nothing precedes the next window, so
+        // the old pass fades out over the audio after 960 instead.
+        let mut sampler = mid_slice_loop(vec![0.2; 4800], json!({}));
+        set_slice(&mut sampler, &[0.0, 0.1, 0.2], 1.0);
+        sampler.update(SAMPLE_RATE);
+        set_slice(&mut sampler, &[0.0, 0.1, 0.2], 0.0);
+        let out = run(&mut sampler, 1500);
+        for (i, &v) in out.iter().enumerate().skip(48) {
+            assert!((v - 1.0).abs() < 1e-3, "sample {i}: expected ~1.0, got {v}");
+        }
+        let wav = ramp_wav();
+        let mut sampler = mid_slice_loop(wav.clone(), json!({}));
+        set_slice(&mut sampler, &[0.0, 0.1, 0.2], 1.0);
+        sampler.update(SAMPLE_RATE);
+        set_slice(&mut sampler, &[0.0, 0.1, 0.2], 0.0);
+        let out = run(&mut sampler, 1000);
+        // The next pass enters frame 0 at sample 479 (one sample ran before
+        // the run) and is at full gain once the 48-frame overlap ends.
+        for k in 527..900 {
+            let want = wav[k - 479] * 5.0;
+            assert!(
+                (out[k] - want).abs() < 1e-4,
+                "sample {k}: expected {want}, got {}",
+                out[k]
+            );
+        }
+    }
+
+    #[test]
+    fn empty_next_slice_ends_the_loop_with_a_fade() {
+        let mut sampler = mid_slice_loop(vec![0.2; 4800], json!({}));
+        // Slice 1 of [0.1, 0.2, 0.2] is empty.
+        run(&mut sampler, 100);
+        set_slice(&mut sampler, &[0.1, 0.2, 0.2], 1.0);
+        let out = run(&mut sampler, 500);
+        let mut prev = out[0];
+        for (i, &v) in out.iter().enumerate() {
+            assert!(
+                (prev - v).abs() < 1.0 / 40.0,
+                "sample {i}: step from {prev} to {v}"
+            );
+            prev = v;
+        }
+        assert!(!sampler.state.playing);
+        assert!(!sampler.state.loop_armed);
+    }
+
+    #[test]
+    fn gate_falling_mid_seam_keeps_the_crossfade_smooth() {
+        let mut sampler = mid_slice_loop(vec![0.2; 4800], json!({}));
+        // The first seam starts at sample 432; drop the gate 10 samples in.
+        run(&mut sampler, 442);
+        assert!(sampler.state.rel_active);
+        set_gate(&mut sampler, 0.0);
+        let out = run(&mut sampler, 300);
+        for (i, &v) in out.iter().enumerate() {
+            assert!((v - 1.0).abs() < 1e-3, "sample {i}: expected ~1.0, got {v}");
+        }
+    }
+
+    #[test]
+    fn gate_falling_near_a_hard_seam_still_fades_out() {
+        // The whole-file loop has a hard seam, so its pass is at full gain up
+        // to the window end. Drop the gate 10 frames before it: the voice runs
+        // on past the end for a full 48-frame fade.
+        let wav_data = make_test_wav(vec![vec![0.2; 480]]);
+        let mut sampler = make_direct(
+            params_with(json!({ "gate": 5.0, "fade": 1.0, "loop": true })),
+            wav_data,
+        );
+        run(&mut sampler, 470);
+        set_gate(&mut sampler, 0.0);
+        let out = run(&mut sampler, 60);
+        let mut prev = 1.0;
+        for (i, &v) in out.iter().enumerate() {
+            assert!(
+                v <= prev + 1e-6 && prev - v < 1.0 / 40.0,
+                "sample {i}: step from {prev} to {v}"
+            );
+            prev = v;
+        }
+        assert_eq!(*out.last().unwrap(), 0.0);
+        assert!(!sampler.state.playing);
+    }
+
+    #[test]
+    fn window_shorter_than_the_fade_still_loops() {
+        // A 4-frame window with a 1 ms fade caps the crossfade at the window
+        // length, so every pass still advances through the window.
+        let wav_data = make_test_wav(vec![vec![0.2; 16]]);
+        let mut sampler = make_direct(
+            params_with(
+                json!({ "gate": 5.0, "fade": 1.0, "loop": true, "slice": [[0.5, 0.75], 0.0] }),
+            ),
+            wav_data,
+        );
+        let mut wraps = 0;
+        let mut last = sampler.state.main.position;
+        for _ in 0..40 {
+            sampler.update(SAMPLE_RATE);
+            assert!(sampler.outputs.sample.get(0).is_finite());
+            if sampler.state.main.position < last {
+                wraps += 1;
+            }
+            last = sampler.state.main.position;
+        }
+        assert!(sampler.state.playing);
+        assert!((8..=11).contains(&wraps), "wraps = {wraps}");
     }
 
     #[test]
@@ -925,9 +1396,9 @@ mod tests {
         sampler.update(SAMPLE_RATE);
         assert!(sampler.state.rel_active);
         assert!(
-            sampler.state.rel_position < 20.0,
+            sampler.state.rel.position < 20.0,
             "release slot should hold the young voice, got position {}",
-            sampler.state.rel_position
+            sampler.state.rel.position
         );
         assert_eq!(
             sampler.state.rel_countdown,
