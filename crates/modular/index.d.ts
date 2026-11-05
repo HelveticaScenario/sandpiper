@@ -75,7 +75,14 @@ export declare class Synthesizer {
    * of statistical smoothing in the UI.
    */
   setModuleProfilingSampleRate(rate: number): void
-  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null, atBar?: number | undefined | null): PatchUpdateResult
+  /**
+   * Queue a patch update. Under an active session clock, `atBar` applies it
+   * where the session bar number becomes `atBar` (or at the next bar when
+   * that has passed), and `originBar` sets the session bar the song's bar
+   * count runs from. Without a session clock `atBar` applies at the next bar
+   * and `originBar` is ignored.
+   */
+  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null, atBar?: number | undefined | null, originBar?: number | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
   /**

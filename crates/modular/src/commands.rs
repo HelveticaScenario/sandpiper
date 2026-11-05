@@ -106,6 +106,12 @@ pub struct PatchUpdate {
     /// With `reset_clock` it also becomes the transport's origin bar.
     pub at_bar: Option<i64>,
 
+    /// Session bar the transport's bar count runs from once this update
+    /// applies under a session clock, set whether the update lands on time
+    /// or late and whatever `reset_clock` says. Peers that agree on it agree
+    /// on ROOT_CLOCK's bar index.
+    pub origin_bar: Option<i64>,
+
     /// Pre-allocated TLS profiler records map, one entry per constructed module
     /// id. Consumed by `profiling::swap_records` on the audio thread; the
     /// evicted map flows back via the garbage queue. Always populated, even
@@ -136,6 +142,7 @@ impl PatchUpdate {
             transport_meta: None,
             reset_clock: false,
             at_bar: None,
+            origin_bar: None,
             profile_records_seed: HashMap::new(),
             profile_shared_seed: HashMap::new(),
         }

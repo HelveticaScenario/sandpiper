@@ -1324,6 +1324,11 @@ impl Synthesizer {
         self.state.set_module_profiling_sample_rate(rate);
     }
 
+    /// Queue a patch update. Under an active session clock, `atBar` applies it
+    /// where the session bar number becomes `atBar` (or at the next bar when
+    /// that has passed), and `originBar` sets the session bar the song's bar
+    /// count runs from. Without a session clock `atBar` applies at the next bar
+    /// and `originBar` is ignored.
     #[napi]
     pub fn update_patch(
         &mut self,
@@ -1331,6 +1336,7 @@ impl Synthesizer {
         trigger: Option<QueuedTrigger>,
         reset_clock: Option<bool>,
         at_bar: Option<i64>,
+        origin_bar: Option<i64>,
     ) -> PatchUpdateResult {
         // Drain deferred deallocations from the audio thread
         self.state.drain_garbage();
@@ -1414,6 +1420,7 @@ impl Synthesizer {
             transport_meta,
             reset_clock,
             at_bar,
+            origin_bar,
         );
 
         PatchUpdateResult {

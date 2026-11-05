@@ -325,6 +325,34 @@ fn late_reset_clock_update_counts_from_its_requested_bar() {
 }
 
 #[test]
+fn explicit_origin_gives_on_time_and_late_peers_one_bar_count() {
+    // One timeline, bar 3.75 at `HOST`. A joins then and applies its bar-4
+    // update on time; B joins half a bar later and applies late, at bar 5,
+    // with a reset. Both carry the song's origin, bar 2.
+    let shared = timeline(HOST, 3.75);
+    let mut a = Peer::new(44_100.0, 64, HOST, 0, shared);
+    let mut b = Peer::new(48_000.0, 128, HOST + 1_000_000, 0, shared);
+    let mut on_time = a.at_bar_update(1, 4);
+    on_time.origin_bar = Some(2);
+    let mut late = b.at_bar_update(1, 4);
+    late.origin_bar = Some(2);
+    late.reset_clock = true;
+    a.play();
+    b.play();
+    a.queue(on_time);
+    b.queue(late);
+
+    // Both render through bar 5.1, session time `HOST` + 2.7 s.
+    a.render_chunks(119_070, 500);
+    b.render_chunks(81_600, 333);
+
+    assert_eq!(a.snapshot().last_late_update_id, 0.0);
+    assert_eq!(b.snapshot().last_late_update_id, 1.0);
+    assert_eq!(a.snapshot().bar, 3);
+    assert_eq!(b.snapshot().bar, 3);
+}
+
+#[test]
 fn newer_at_bar_update_replaces_the_queued_one_and_keeps_its_bar() {
     let mut peer = Peer::new(44_100.0, 64, HOST, 0, timeline(HOST, 3.75));
     peer.play();

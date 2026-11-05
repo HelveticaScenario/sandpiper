@@ -1479,6 +1479,7 @@ impl AudioState {
 
     /// Build a PatchUpdate from desired graph and send to audio thread.
     /// This computes the diff using the shadow state and constructs new modules on the main thread.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_patch(
         &self,
         desired_graph: PatchGraph,
@@ -1489,6 +1490,7 @@ impl AudioState {
         transport_meta: Option<TransportMeta>,
         reset_clock: bool,
         at_bar: Option<i64>,
+        origin_bar: Option<i64>,
     ) -> Result<()> {
         let PatchGraph {
             modules,
@@ -1694,6 +1696,7 @@ impl AudioState {
         // Restart the transport when applying this update (set on a buffer switch)
         update.reset_clock = reset_clock;
         update.at_bar = at_bar;
+        update.origin_bar = origin_bar;
 
         // Add-only: the audio thread must write only into pre-existing slots, so a
         // dropped module's removal is deferred until its swap lands. Promote any
@@ -1712,6 +1715,7 @@ impl AudioState {
         self.send_command(GraphCommand::QueuedPatchUpdate { update, trigger })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn handle_set_patch(
         &self,
         patch_graph: PatchGraph,
@@ -1722,6 +1726,7 @@ impl AudioState {
         transport_meta: Option<TransportMeta>,
         reset_clock: bool,
         at_bar: Option<i64>,
+        origin_bar: Option<i64>,
     ) -> Vec<ApplyPatchError> {
         // Validate patch
         let schemas = schema();
@@ -1762,6 +1767,7 @@ impl AudioState {
             transport_meta,
             reset_clock,
             at_bar,
+            origin_bar,
         ) {
             return vec![ApplyPatchError {
                 message: format!("Failed to apply patch: {}", e),
@@ -2292,6 +2298,13 @@ impl AudioProcessor {
             std::mem::swap(&mut *vu, &mut update.vu_next);
         }
 
+        // An explicit origin fixes the shared bar count directly.
+        if let Some(origin) = update.origin_bar
+            && self.session.is_active()
+        {
+            self.session.set_origin_bar(origin);
+        }
+
         // Restart the transport when this update switches playback to a different
         // buffer (song). Runs after the inserts/transfer/connect above so
         // ROOT_CLOCK's message listener is registered; the swap-site eager-fill
@@ -2301,9 +2314,11 @@ impl AudioProcessor {
                 // The session timeline owns the bar phase and the bar count runs
                 // from the origin bar, so every peer applying the same `at_bar`
                 // restarts the song's bar count on the same bar, even a peer that
-                // applied late. Without `at_bar` the song starts at the swap's bar.
+                // applied late. An explicit `origin_bar` wins; with neither the
+                // song starts at the swap's bar.
                 let origin = update
-                    .at_bar
+                    .origin_bar
+                    .or(update.at_bar)
                     .unwrap_or_else(|| crate::session_clock::split_bar(bar_position).1);
                 self.session.set_origin_bar(origin);
                 use modular_core::types::ROOT_CLOCK_ID;
