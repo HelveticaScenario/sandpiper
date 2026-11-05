@@ -4,6 +4,7 @@ import {
     MenuItem,
     app,
     autoUpdater,
+    clipboard,
     dialog,
     globalShortcut,
     ipcMain,
@@ -61,6 +62,8 @@ import {
 import { PERFORMANCE_WINDOW_NAME } from '../shared/video/performanceWindowName';
 import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
+import { buildCompatKey } from './session/compat';
+import { SessionController } from './session/sessionIpc';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
 import { syphonAction, type SyphonTarget } from './syphon/syphonTarget';
 import { requestCameraAccess, screenSource } from './liveSources';
@@ -912,6 +915,31 @@ function registerIPCHandler<T extends keyof typeof IPC_CHANNELS>(
 // Note: do this instead of importing schemas in renderer to avoid hot-reloading schema changes before
 // Main process has restarted with the updated native module.
 registerIPCHandler('GET_SCHEMAS', () => schemas);
+
+const sessionController = new SessionController({
+    compat: buildCompatKey(app.getVersion(), schemas),
+    readSavedName: () => configStore.load().sessionName,
+    saveName: (name) =>
+        configStore.update((config) => {
+            config.sessionName = name;
+        }),
+    sendState: (state) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(IPC_CHANNELS.SESSION_ON_STATE, state);
+        }
+    },
+    writeClipboard: (text) => clipboard.writeText(text),
+});
+registerIPCHandler('SESSION_GET_STATE', () => sessionController.getState());
+registerIPCHandler('SESSION_GET_NAME', () => sessionController.getName());
+registerIPCHandler('SESSION_START', (name) => sessionController.start(name));
+registerIPCHandler('SESSION_JOIN', (invite, name) =>
+    sessionController.join(invite, name),
+);
+registerIPCHandler('SESSION_LEAVE', () => sessionController.leave());
+registerIPCHandler('SESSION_COPY_INVITE', () =>
+    sessionController.copyInvite(),
+);
 
 // Syphon window output (macOS): the action lives here, so the renderer's
 // shoreline.toggleSyphon command (palette/keymap) round-trips through IPC.
@@ -2308,6 +2336,16 @@ const createMenu = (): void => {
                     },
                     label: 'Open Workspace...',
                 },
+                {
+                    click: () => {
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.OPEN_SESSION,
+                            );
+                        }
+                    },
+                    label: 'Live Session...',
+                },
                 { type: 'separator' },
                 {
                     ...menuShortcut('shoreline.save', 'CmdOrCtrl+S'),
@@ -2674,6 +2712,7 @@ app.on('ready', () => {
 
 app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    void sessionController.leave();
     openFileWatcher.close();
     syphonBridge?.dispose();
 });

@@ -25,6 +25,7 @@ import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
 import type { EqPanelDef } from './dsl/eqPanelTypes';
+import type { SessionState } from './session';
 import type {
     VideoCvValue,
     VideoPreviewSite,
@@ -99,6 +100,8 @@ export interface AppConfig {
     lastOpenedFolder?: string;
     audioConfig?: AudioConfig;
     skippedUpdateVersion?: string;
+    /** Display name shown to peers in a live session. */
+    sessionName?: string;
     /** Opacity (0..1) of the dark backing behind each line of code while video shows behind the code. Default 0.6. */
     codeBackdropOpacity?: number;
     /** Shape of the performance window: a fixed aspect ratio, or free. Default 'free'. */
@@ -428,6 +431,15 @@ export const IPC_CHANNELS = {
     // WAV operations
     WAVS_ON_CHANGE: 'modular:wavs:on-change',
 
+    // Live session operations
+    SESSION_GET_STATE: 'modular:session:get-state',
+    SESSION_GET_NAME: 'modular:session:get-name',
+    SESSION_START: 'modular:session:start',
+    SESSION_JOIN: 'modular:session:join',
+    SESSION_LEAVE: 'modular:session:leave',
+    SESSION_COPY_INVITE: 'modular:session:copy-invite',
+    SESSION_ON_STATE: 'modular:session:on-state',
+
     // Update operations
     UPDATE_CHECK: 'modular:update:check',
     UPDATE_DOWNLOAD: 'modular:update:download',
@@ -448,6 +460,7 @@ export const MENU_CHANNELS = {
     OPEN_ENGINE_HEALTH: 'modular:menu:open-engine-health',
     OPEN_MODULE_PROFILE: 'modular:menu:open-module-profile',
     OPEN_SETTINGS: 'modular:menu:open-settings',
+    OPEN_SESSION: 'modular:menu:open-session',
     OPEN_WORKSPACE: 'modular:menu:open-workspace',
     SAVE: 'modular:menu:save',
     STOP: 'modular:menu:stop',
@@ -635,6 +648,20 @@ export interface IPCHandlers {
 
     // WAV operations
     [IPC_CHANNELS.WAVS_ON_CHANGE]: () => void;
+
+    // Live session operations
+    [IPC_CHANNELS.SESSION_GET_STATE]: () => SessionState;
+    /** The display name the session dialog starts with. */
+    [IPC_CHANNELS.SESSION_GET_NAME]: () => string;
+    [IPC_CHANNELS.SESSION_START]: (name: string) => Promise<SessionState>;
+    [IPC_CHANNELS.SESSION_JOIN]: (
+        invite: string,
+        name: string,
+    ) => Promise<SessionState>;
+    [IPC_CHANNELS.SESSION_LEAVE]: () => Promise<void>;
+    /** Copy the invite link; false when there is no session. */
+    [IPC_CHANNELS.SESSION_COPY_INVITE]: () => boolean;
+    [IPC_CHANNELS.SESSION_ON_STATE]: (state: SessionState) => void;
 
     /** A watched file changed on disk; `content` is as FS_READ_FILE returns. */
     [IPC_CHANNELS.FS_ON_FILE_CHANGED]: (change: FileChange) => void;

@@ -210,6 +210,11 @@ export const configSchema = {
             },
             type: 'object',
         },
+        sessionName: {
+            description: 'Display name shown to peers in a live session',
+            maxLength: 40,
+            type: 'string',
+        },
         skippedUpdateVersion: {
             description:
                 'Release version whose update prompt was dismissed (managed automatically)',

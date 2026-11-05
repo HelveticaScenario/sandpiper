@@ -5,7 +5,10 @@ export default defineConfig({
     build: {
         sourcemap: true,
         rollupOptions: {
-            external: ['@modular/core'],
+            // Native addons load prebuilt binaries relative to their own
+            // package directory, so they stay out of the bundle; packaging
+            // copies them in (see `copyNodeDeps` in forge.config.ts).
+            external: ['@modular/core', 'hyperswarm'],
         },
     },
 });

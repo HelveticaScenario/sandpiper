@@ -12,6 +12,7 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
+import { copyNodeDeps } from './scripts/copy-node-deps.mjs';
 
 // if (process.env.APPLE_ID && process.env.APPLE_PASSWORD && process.env.APPLE_TEAM_ID) {
 
@@ -141,6 +142,15 @@ const config: ForgeConfig = {
                     );
                 }
             }
+
+            // Packages the main bundle leaves external (vite.main.config.ts).
+            copyNodeDeps({
+                arch,
+                buildPath,
+                platform,
+                repoRoot: __dirname,
+                roots: ['hyperswarm'],
+            });
 
             // macOS: stage the headless Syphon companion into the app bundle.
             // buildPath is Contents/Resources/app, so Contents is two levels up.
