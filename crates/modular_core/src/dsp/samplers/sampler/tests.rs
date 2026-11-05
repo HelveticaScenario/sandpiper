@@ -587,6 +587,21 @@ fn retrigger_never_demotes_an_exited_voice_over_a_live_release() {
     );
 }
 
+#[test]
+fn reverse_start_on_a_file_past_f32_range_reads_the_last_frame() {
+    // 2^24 + 4 frames: the last index rounds up to the length in f32.
+    let n = (1 << 24) + 4;
+    let mut wav = vec![0.0; n];
+    wav[n - 1] = 0.2;
+    let mut sampler = make_direct(
+        params_with(json!({ "gate": 5.0, "speed": -1.0, "fade": 0.0 })),
+        make_test_wav(vec![wav]),
+    );
+    sampler.update(SAMPLE_RATE);
+    let v = sampler.outputs.sample.get(0);
+    assert!((v - 1.0).abs() < 1e-6, "expected the last frame, got {v}");
+}
+
 // === looping ===
 
 fn run(sampler: &mut Sampler, n: usize) -> Vec<f32> {

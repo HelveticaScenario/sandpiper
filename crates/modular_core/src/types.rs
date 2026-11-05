@@ -1080,14 +1080,6 @@ impl SampleBuffer {
         f(&mut self.samples)
     }
 
-    /// Hermite (4-point cubic) interpolation at a fractional frame position.
-    /// Out-of-bounds indices are clamped — suitable for one-shot sample playback.
-    /// Allocation-free; safe for the audio thread.
-    #[inline]
-    pub fn read_hermite_clamped(&self, channel: usize, frame: f32) -> f32 {
-        hermite_clamped(self.channel(channel), frame)
-    }
-
     /// One channel's samples; empty for a channel the buffer does not have.
     #[inline]
     pub fn channel(&self, channel: usize) -> &[f32] {
@@ -1136,17 +1128,17 @@ impl SampleBuffer {
 
 /// Hermite (4-point cubic) read of `samples` as a ring of `len` frames: the
 /// position and its neighbours wrap, so the last frame interpolates into the
-/// first.
+/// first. The frame is f64 for the same reason as [`hermite_clamped`].
 #[inline]
-pub fn hermite_wrapped(samples: &[f32], frame: f32) -> f32 {
+pub fn hermite_wrapped(samples: &[f32], frame: f64) -> f32 {
     let n = samples.len();
     if !frame.is_finite() || n == 0 {
         return 0.0;
     }
-    let frame = frame.rem_euclid(n as f32);
+    let frame = frame.rem_euclid(n as f64);
     // rem_euclid can round up to exactly n for tiny negative inputs.
-    let left = (frame.floor() as usize).min(n - 1);
-    let frac = frame - left as f32;
+    let left = (frame as usize).min(n - 1);
+    let frac = (frame - left as f64) as f32;
     if frac <= f32::EPSILON {
         return samples[left];
     }
@@ -1161,20 +1153,19 @@ pub fn hermite_wrapped(samples: &[f32], frame: f32) -> f32 {
 
 /// Hermite (4-point cubic) read of `samples` at a fractional frame position,
 /// silent outside `[0, len - 1]` and clamping the neighbours at the ends.
+/// The frame is f64 and only the fraction narrows to f32: past 2^24 frames
+/// (about six minutes at 48 kHz) an f32 frame cannot hold a fraction, and
+/// its rounding can carry a bounds check past the last frame.
 #[inline]
-pub fn hermite_clamped(samples: &[f32], frame: f32) -> f32 {
+pub fn hermite_clamped(samples: &[f32], frame: f64) -> f32 {
     let frame_count = samples.len();
-    if !frame.is_finite() || frame_count == 0 {
+    // Also rejects NaN and an empty buffer.
+    if !(frame >= 0.0 && frame <= frame_count as f64 - 1.0) {
         return 0.0;
     }
 
-    let max_frame = (frame_count - 1) as f32;
-    if frame < 0.0 || frame > max_frame {
-        return 0.0;
-    }
-
-    let left = frame.floor() as usize;
-    let frac = frame - left as f32;
+    let left = frame as usize;
+    let frac = (frame - left as f64) as f32;
     if frac <= f32::EPSILON {
         return samples[left];
     }
@@ -1239,12 +1230,6 @@ impl WavData {
 
     pub fn read(&self, channel: usize, frame: usize) -> f32 {
         self.buffer.read(channel, frame)
-    }
-
-    /// Hermite-interpolated read with clamping (for one-shot sample playback).
-    #[inline]
-    pub fn read_hermite_clamped(&self, channel: usize, frame: f32) -> f32 {
-        self.buffer.read_hermite_clamped(channel, frame)
     }
 
     /// One channel's samples; empty for a channel the file does not have.
@@ -1314,13 +1299,6 @@ impl Wav {
         self.cached_data
             .as_ref()
             .map(|d| d.read(channel, frame))
-            .unwrap_or(0.0)
-    }
-
-    pub fn read_hermite_clamped(&self, channel: usize, frame: f32) -> f32 {
-        self.cached_data
-            .as_ref()
-            .map(|d| d.read_hermite_clamped(channel, frame))
             .unwrap_or(0.0)
     }
 
@@ -3604,6 +3582,33 @@ mod sample_buffer_tests {
         let buf = SampleBuffer::from_samples(vec![vec![10.0, 20.0]], 48000.0);
         let sum: f32 = buf.with_data(|data| data[0].iter().sum());
         assert_eq!(sum, 30.0);
+    }
+
+    /// Longer than 2^24 frames, with a length whose last index rounds up to
+    /// the length itself in f32.
+    const LONG_FILE_FRAMES: usize = (1 << 24) + 4;
+
+    #[test]
+    fn hermite_reads_stay_in_bounds_and_precise_past_f32_range() {
+        let n = LONG_FILE_FRAMES;
+        assert_eq!((n - 1) as f32, n as f32, "setup: last index must round up");
+        let samples: Vec<f32> = (0..n).map(|i| (i % 7) as f32).collect();
+        let last = (n - 1) as f64;
+        assert_eq!(hermite_clamped(&samples, last), samples[n - 1]);
+        assert_eq!(hermite_clamped(&samples, last + 0.5), 0.0);
+        assert_eq!(hermite_wrapped(&samples, last), samples[n - 1]);
+        // The fraction survives far into the file.
+        let frame = (1u64 << 24) as f64 + 0.25;
+        let left = 1 << 24;
+        let want = hermite4(
+            samples[left - 1],
+            samples[left],
+            samples[left + 1],
+            samples[left + 2],
+            0.25,
+        );
+        assert_eq!(hermite_clamped(&samples, frame), want);
+        assert_eq!(hermite_wrapped(&samples, frame), want);
     }
 }
 

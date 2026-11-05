@@ -41,9 +41,9 @@ impl Voice {
     /// Reads one channel's samples at the voice position.
     pub(super) fn read(&self, samples: &[f32]) -> f32 {
         if self.wrap_reads {
-            hermite_wrapped(samples, self.position as f32)
+            hermite_wrapped(samples, self.position)
         } else {
-            hermite_clamped(samples, self.position as f32)
+            hermite_clamped(samples, self.position)
         }
     }
 }

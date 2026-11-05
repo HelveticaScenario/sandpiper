@@ -499,7 +499,7 @@ impl Grains {
                     _ => lut_read(lut, t),
                 };
 
-                let sample = hermite_clamped(samples, grain.read_pos as f32);
+                let sample = hermite_clamped(samples, grain.read_pos);
 
                 sum += sample * window;
                 active_count += 1;
@@ -925,7 +925,7 @@ mod tests {
     #[test]
     fn grains_oob_read_is_silent() {
         // A 2-frame WAV; start=5V (end) + forward playback → reads off the end
-        // immediately → silence (read_hermite_clamped returns 0 OOB).
+        // immediately → silence (hermite_clamped returns 0 OOB).
         let wav = make_test_wav(vec![vec![1.0, 1.0]], SAMPLE_RATE);
         let module = make_and_connect(
             serde_json::json!({
