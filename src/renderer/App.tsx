@@ -13,6 +13,8 @@ import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
 import { SessionButton, SessionPanel } from './components/SessionPanel';
 import { useSessionState } from './hooks/useSessionState';
+import { useCustomMonaco } from './hooks/useCustomMonaco';
+import { useSharedEditing } from './session/useSharedEditing';
 import { ModuleProfile } from './components/ModuleProfile';
 import { MigrationDiffModal } from './components/MigrationDiffModal';
 import {
@@ -122,6 +124,8 @@ function App() {
 
     // Workspace & filesystem
     const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
+    // Filled once the session bindings exist, below the buffers they read.
+    const isSharedFileRef = useRef<(filePath: string) => boolean>(() => false);
     const [fileTree, setFileTree] = useState<FileTreeEntry[]>([]);
 
     const refreshFileTree = useCallback(async () => {
@@ -165,7 +169,14 @@ function App() {
         dismissSaveConflict,
         overwriteOnConflict,
         revertToDiskContent,
+        setSharedText,
+        moveBuffer,
+        detachBuffer,
     } = useEditorBuffers({
+        isSharedFile: useCallback(
+            (filePath: string) => isSharedFileRef.current(filePath),
+            [],
+        ),
         refreshFileTree,
         workspaceRoot,
         onFileSaved: handleFileSaved,
@@ -178,7 +189,20 @@ function App() {
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
     const [isSessionOpen, setIsSessionOpen] = useState(false);
     const closeSession = useCallback(() => setIsSessionOpen(false), []);
-    const sessionState = useSessionState();
+    // Starting a session shares the workspace as it is on disk, so unsaved
+    // edits are saved first so the shared text includes them.
+    const saveWorkspaceBuffers = useCallback(async () => {
+        for (const buffer of buffers) {
+            if (
+                buffer.kind === 'file' &&
+                buffer.dirty &&
+                workspaceRoot &&
+                buffer.filePath.startsWith(workspaceRoot)
+            ) {
+                await saveFile(buffer.filePath);
+            }
+        }
+    }, [buffers, saveFile, workspaceRoot]);
     const [isPaletteOpen, setIsPaletteOpen] = useState(false);
     const [isModuleProfileOpen, setIsModuleProfileOpen] = useState(false);
     const [migrationState, setMigrationState] = useState<{
@@ -240,6 +264,26 @@ function App() {
     // editor actions) can subscribe instead of reading the ref during render.
     const [paletteEditor, setPaletteEditor] =
         useState<editor.IStandaloneCodeEditor | null>(null);
+
+    const monaco = useCustomMonaco();
+    const sessionState = useSessionState();
+    const isSharedFile = useSharedEditing({
+        editor: paletteEditor,
+        monaco,
+        onSharedFileMoved: moveBuffer,
+        onSharedFileRemoved: detachBuffer,
+        onSharedTextChanged: setSharedText,
+        openFilePaths: useMemo(
+            () =>
+                buffers.flatMap((b) => (b.kind === 'file' ? [b.filePath] : [])),
+            [buffers],
+        ),
+        session: sessionState,
+        workspaceRoot,
+    });
+    useEffect(() => {
+        isSharedFileRef.current = isSharedFile;
+    }, [isSharedFile]);
     const performanceTheme = useMemo(
         () => themes.find((t) => t.id === performanceView.themeId) ?? theme,
         [themes, theme, performanceView.themeId],
@@ -987,6 +1031,24 @@ function App() {
                 console.error('Failed to read config:', err);
             });
     }, []);
+
+    // The main process switches workspace when joining a live session, and
+    // reports files a session adds, moves or removes.
+    useEffect(() => {
+        const offWorkspace = electronAPI.filesystem.onWorkspaceChanged(
+            (workspace) => {
+                setWorkspaceRoot(workspace.path);
+                void refreshFileTree();
+            },
+        );
+        const offTree = electronAPI.filesystem.onTreeChanged(() => {
+            void refreshFileTree();
+        });
+        return () => {
+            offWorkspace();
+            offTree();
+        };
+    }, [refreshFileTree]);
 
     // Load workspace and file tree on mount
     useEffect(() => {
@@ -2808,6 +2870,7 @@ function App() {
 
             <SessionPanel
                 isOpen={isSessionOpen}
+                onBeforeStart={saveWorkspaceBuffers}
                 onClose={closeSession}
                 state={sessionState}
             />

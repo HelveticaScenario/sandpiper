@@ -63,7 +63,8 @@ import { PERFORMANCE_WINDOW_NAME } from '../shared/video/performanceWindowName';
 import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
 import { buildCompatKey } from './session/compat';
-import { SessionController } from './session/sessionIpc';
+import { SessionController, parseBootstrap } from './session/sessionIpc';
+import { SessionWorkspace } from './session/sessionWorkspace';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
 import { syphonAction, type SyphonTarget } from './syphon/syphonTarget';
 import { requestCameraAccess, screenSource } from './liveSources';
@@ -917,6 +918,8 @@ function registerIPCHandler<T extends keyof typeof IPC_CHANNELS>(
 registerIPCHandler('GET_SCHEMAS', () => schemas);
 
 const sessionController = new SessionController({
+    // Tests point sessions at a local DHT through this variable.
+    bootstrap: parseBootstrap(process.env.MODULAR_SESSION_BOOTSTRAP),
     compat: buildCompatKey(app.getVersion(), schemas),
     readSavedName: () => configStore.load().sessionName,
     saveName: (name) =>
@@ -940,6 +943,63 @@ registerIPCHandler('SESSION_LEAVE', () => sessionController.leave());
 registerIPCHandler('SESSION_COPY_INVITE', () =>
     sessionController.copyInvite(),
 );
+
+function sendToMainWindow(channel: string, ...args: unknown[]) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(channel, ...args);
+    }
+}
+
+/** Make `root` the open workspace and tell the renderer. */
+function switchWorkspace(root: string) {
+    currentWorkspaceRoot = root;
+    startWavsWatcher(root);
+    configStore.update((config) => {
+        config.lastOpenedFolder = root;
+    });
+    sendToMainWindow(IPC_CHANNELS.FS_ON_WORKSPACE_CHANGED, { path: root });
+}
+
+let sessionWorkspace: SessionWorkspace | null = null;
+sessionController.manager.on('started', (session) => {
+    sessionWorkspace = new SessionWorkspace(session, {
+        fromDisk: (relativePath, content) =>
+            isStampablePath(relativePath)
+                ? stripPatchVersionStamp(content)
+                : content,
+        getWorkspaceRoot: () => currentWorkspaceRoot,
+        onTreeChanged: () =>
+            sendToMainWindow(IPC_CHANNELS.FS_ON_TREE_CHANGED),
+        renderer: {
+            awarenessUpdate: (update) =>
+                sendToMainWindow(
+                    IPC_CHANNELS.SESSION_ON_AWARENESS_UPDATE,
+                    update,
+                ),
+            docUpdate: (update) =>
+                sendToMainWindow(IPC_CHANNELS.SESSION_ON_DOC_UPDATE, update),
+        },
+        sessionsDir: path.join(app.getPath('userData'), 'sessions'),
+        switchWorkspace,
+        toDisk: (relativePath, content) =>
+            isStampablePath(relativePath)
+                ? stampPatchVersionSource(content, app.getVersion())
+                : content,
+    });
+});
+sessionController.manager.on('ended', () => {
+    sessionWorkspace?.dispose();
+    sessionWorkspace = null;
+});
+registerIPCHandler('SESSION_DOC_CONNECT', () =>
+    sessionWorkspace ? sessionWorkspace.connectRenderer() : null,
+);
+registerIPCHandler('SESSION_DOC_UPDATE', (update) => {
+    sessionWorkspace?.shared.applyRendererUpdate(update);
+});
+registerIPCHandler('SESSION_AWARENESS_UPDATE', (update) => {
+    sessionWorkspace?.shared.applyRendererAwareness(update);
+});
 
 // Syphon window output (macOS): the action lives here, so the renderer's
 // shoreline.toggleSyphon command (palette/keymap) round-trips through IPC.
@@ -1546,6 +1606,13 @@ registerIPCHandler('SHOW_CONTEXT_MENU', (options: ContextMenuOptions) => {
 // Filesystem IPC handlers
 // @ts-expect-error - async handler returns Promise
 registerIPCHandler('FS_SELECT_WORKSPACE', async () => {
+    if (sessionWorkspace) {
+        await dialog.showMessageBox({
+            message: 'Leave the live session before opening another workspace.',
+            type: 'info',
+        });
+        return null;
+    }
     const properties: Electron.OpenDialogOptions['properties'] = [
         'openDirectory',
     ];
@@ -1608,7 +1675,12 @@ function readEditorContent(absolutePath: string): string {
 const watchedPathSpellings = new Map<string, string>();
 const openFileWatcher = createOpenFileWatcher((absolutePath) => {
     const filePath = watchedPathSpellings.get(absolutePath);
-    if (filePath === undefined) {
+    // Shared files reach the editor through the session document, never
+    // through disk.
+    if (
+        filePath === undefined ||
+        sessionWorkspace?.mirror.isSharedFile(absolutePath)
+    ) {
         return;
     }
     let content: string;
@@ -1646,6 +1718,10 @@ registerIPCHandler('FS_READ_FILE', (relativePath) => {
         throw new Error('Invalid file path or no workspace selected');
     }
 
+    const shared = sessionWorkspace?.mirror.readText(absolutePath);
+    if (shared != null) {
+        return shared;
+    }
     try {
         return readEditorContent(absolutePath);
     } catch (error) {
@@ -1665,6 +1741,16 @@ registerIPCHandler(
                 error: 'Invalid file path or no workspace selected',
                 success: false,
             };
+        }
+
+        // A save that does not name the content it expects on disk (saving
+        // an untitled buffer, or overwriting on conflict) replaces the file.
+        if (
+            sessionWorkspace?.mirror.write(absolutePath, content, {
+                replace: expectedDiskContent === undefined,
+            })
+        ) {
+            return { success: true };
         }
 
         // The check and the write run synchronously together, so no other write
@@ -1757,7 +1843,11 @@ registerIPCHandler('FS_RENAME_FILE', (oldPath, newPath) => {
             }
         }
 
-        fs.renameSync(oldAbsolutePath, newAbsolutePath);
+        if (
+            !sessionWorkspace?.mirror.rename(oldAbsolutePath, newAbsolutePath)
+        ) {
+            fs.renameSync(oldAbsolutePath, newAbsolutePath);
+        }
         return { success: true };
     } catch (error) {
         console.error('Error renaming file:', error);
@@ -1776,6 +1866,7 @@ registerIPCHandler('FS_DELETE_FILE', async (filePath) => {
 
     try {
         await shell.trashItem(absolutePath);
+        sessionWorkspace?.mirror.delete(absolutePath);
         return { success: true };
     } catch (error) {
         console.error('Error deleting file:', error);
@@ -1801,7 +1892,14 @@ registerIPCHandler('FS_MOVE_FILE', (sourcePath, destPath) => {
             fs.mkdirSync(dir, { recursive: true });
         }
 
-        fs.renameSync(sourceAbsolutePath, destAbsolutePath);
+        if (
+            !sessionWorkspace?.mirror.rename(
+                sourceAbsolutePath,
+                destAbsolutePath,
+            )
+        ) {
+            fs.renameSync(sourceAbsolutePath, destAbsolutePath);
+        }
         return { success: true };
     } catch (error) {
         console.error('Error moving file:', error);
@@ -1820,6 +1918,7 @@ registerIPCHandler('FS_CREATE_FOLDER', (relativePath) => {
 
     try {
         fs.mkdirSync(absolutePath, { recursive: true });
+        sessionWorkspace?.mirror.createFolder(absolutePath);
         return { success: true };
     } catch (error) {
         console.error('Error creating folder:', error);

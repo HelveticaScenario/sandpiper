@@ -17,7 +17,11 @@ import {
     SyphonToggleResult,
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
-import type { FileChange, QueuedTrigger } from '../shared/ipcTypes';
+import type {
+    FileChange,
+    QueuedTrigger,
+    WorkspaceFolder,
+} from '../shared/ipcTypes';
 import type { SessionState } from '../shared/session';
 import type {
     VideoCvValue,
@@ -200,6 +204,10 @@ export interface ElectronAPI {
             IPCHandlers[typeof IPC_CHANNELS.FS_WATCH_OPEN_FILES]
         >;
         onFileChanged: (callback: (change: FileChange) => void) => () => void;
+        onTreeChanged: (callback: () => void) => () => void;
+        onWorkspaceChanged: (
+            callback: (workspace: WorkspaceFolder) => void,
+        ) => () => void;
     };
     // Menu events
     onMenuNewFile: (callback: () => void) => () => void;
@@ -329,6 +337,19 @@ export interface ElectronAPI {
             IPCHandlers[typeof IPC_CHANNELS.SESSION_COPY_INVITE]
         >;
         onState: (callback: (state: SessionState) => void) => () => void;
+        docConnect: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SESSION_DOC_CONNECT]
+        >;
+        sendDocUpdate: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SESSION_DOC_UPDATE]
+        >;
+        sendAwarenessUpdate: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SESSION_AWARENESS_UPDATE]
+        >;
+        onDocUpdate: (callback: (update: Uint8Array) => void) => () => void;
+        onAwarenessUpdate: (
+            callback: (update: Uint8Array) => void,
+        ) => () => void;
     };
     onMenuOpenSession: (callback: () => void) => () => void;
 }
@@ -508,6 +529,10 @@ const electronAPI: ElectronAPI = {
         watchOpenFiles: (...args) => invokeIPC('FS_WATCH_OPEN_FILES', ...args),
 
         onFileChanged: menuEventHandler(IPC_CHANNELS.FS_ON_FILE_CHANGED),
+        onTreeChanged: menuEventHandler(IPC_CHANNELS.FS_ON_TREE_CHANGED),
+        onWorkspaceChanged: menuEventHandler<[WorkspaceFolder]>(
+            IPC_CHANNELS.FS_ON_WORKSPACE_CHANGED,
+        ),
 
         writeFile: (...args) => invokeIPC('FS_WRITE_FILE', ...args),
     },
@@ -630,6 +655,16 @@ const electronAPI: ElectronAPI = {
             IPC_CHANNELS.SESSION_ON_STATE,
         ),
         start: (...args) => invokeIPC('SESSION_START', ...args),
+        docConnect: (...args) => invokeIPC('SESSION_DOC_CONNECT', ...args),
+        sendDocUpdate: (...args) => invokeIPC('SESSION_DOC_UPDATE', ...args),
+        sendAwarenessUpdate: (...args) =>
+            invokeIPC('SESSION_AWARENESS_UPDATE', ...args),
+        onDocUpdate: menuEventHandler<[Uint8Array]>(
+            IPC_CHANNELS.SESSION_ON_DOC_UPDATE,
+        ),
+        onAwarenessUpdate: menuEventHandler<[Uint8Array]>(
+            IPC_CHANNELS.SESSION_ON_AWARENESS_UPDATE,
+        ),
     },
     onMenuOpenSession: menuEventHandler(MENU_CHANNELS.OPEN_SESSION),
 };

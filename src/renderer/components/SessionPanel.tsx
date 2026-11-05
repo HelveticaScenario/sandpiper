@@ -9,6 +9,8 @@ interface SessionPanelProps {
     isOpen: boolean;
     onClose: () => void;
     state: SessionState;
+    /** Runs before starting a session, e.g. to save open files it will share. */
+    onBeforeStart: () => Promise<void>;
 }
 
 function PeerRow({ peer, isSelf }: { peer: SessionPeer; isSelf: boolean }) {
@@ -24,7 +26,12 @@ function PeerRow({ peer, isSelf }: { peer: SessionPeer; isSelf: boolean }) {
     );
 }
 
-export function SessionPanel({ isOpen, onClose, state }: SessionPanelProps) {
+export function SessionPanel({
+    isOpen,
+    onClose,
+    state,
+    onBeforeStart,
+}: SessionPanelProps) {
     const panelRef = useRef<HTMLDivElement>(null);
     const [name, setName] = useState('');
     const [invite, setInvite] = useState('');
@@ -113,7 +120,10 @@ export function SessionPanel({ isOpen, onClose, state }: SessionPanelProps) {
                                 className="session-primary"
                                 disabled={busy}
                                 onClick={() =>
-                                    run(() => electronAPI.session.start(name))
+                                    run(async () => {
+                                        await onBeforeStart();
+                                        await electronAPI.session.start(name);
+                                    })
                                 }
                             >
                                 Start a session

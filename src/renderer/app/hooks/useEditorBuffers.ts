@@ -24,13 +24,23 @@ interface UseEditorBuffersParams {
     refreshFileTree: () => Promise<void>;
     /** Called with the absolute path after a buffer is successfully saved. */
     onFileSaved?: (filePath: string) => void;
+    /**
+     * Whether a path is a live session's shared file. Shared files are saved
+     * continuously by the session, so their buffers are never dirty.
+     */
+    isSharedFile?: (filePath: string) => boolean;
 }
 
 export function useEditorBuffers({
     workspaceRoot,
     refreshFileTree,
     onFileSaved,
+    isSharedFile,
 }: UseEditorBuffersParams) {
+    const isSharedFileRef = useRef(isSharedFile);
+    useEffect(() => {
+        isSharedFileRef.current = isSharedFile;
+    });
     const [restoredBuffers] = useState(readUnsavedBuffers);
     const [buffers, setBuffers] = useState(restoredBuffers);
 
@@ -124,15 +134,60 @@ export function useEditorBuffers({
     const handlePatchChange = useCallback(
         (value: string) => {
             setBuffers((prev) =>
-                prev.map((b) =>
-                    getBufferId(b) === activeBufferId
-                        ? { ...withBufferContent(b, value), isPreview: false }
-                        : b,
-                ),
+                prev.map((b) => {
+                    if (getBufferId(b) !== activeBufferId) {
+                        return b;
+                    }
+                    const updated =
+                        b.kind === 'file' &&
+                        isSharedFileRef.current?.(b.filePath)
+                            ? withSavedContent({ ...b, content: value }, value)
+                            : withBufferContent(b, value);
+                    return { ...updated, isPreview: false };
+                }),
             );
         },
         [activeBufferId],
     );
+
+    /** Take a shared file's text as a peer left it; the session has saved it. */
+    const setSharedText = useCallback((filePath: string, text: string) => {
+        setBuffers((prev) =>
+            prev.map((b) =>
+                b.kind === 'file' &&
+                b.filePath === filePath &&
+                (b.content !== text || b.dirty)
+                    ? withSavedContent({ ...b, content: text }, text)
+                    : b,
+            ),
+        );
+    }, []);
+
+    /** Follow a file a peer moved; the session moved it on disk. */
+    const moveBuffer = useCallback((oldPath: string, newPath: string) => {
+        setBuffers((prev) =>
+            prev.map((b) =>
+                b.kind === 'file' && b.filePath === oldPath
+                    ? { ...b, filePath: newPath }
+                    : b,
+            ),
+        );
+        setActiveBufferId((active) => (active === oldPath ? newPath : active));
+    }, []);
+
+    /**
+     * A peer deleted a file open here: keep its text but mark it unsaved, so
+     * closing the buffer offers to save it again.
+     */
+    const detachBuffer = useCallback((filePath: string) => {
+        setBuffers((prev) =>
+            prev.map((b) =>
+                b.kind === 'file' && b.filePath === filePath
+                    ? { ...b, dirty: true, savedContent: null }
+                    : b,
+            ),
+        );
+    }, []);
 
     const openFile = useCallback(
         async (relPath: string, options?: { preview?: boolean }) => {
@@ -163,6 +218,18 @@ export function useEditorBuffers({
             const content = await electronAPI.filesystem.readFile(absPath);
 
             setBuffers((prev) => {
+                // An overlapping open (the clicks of a double-click) may have
+                // added this file while the read was in flight.
+                const opened = prev.find(
+                    (b) => b.kind === 'file' && b.filePath === absPath,
+                );
+                if (opened) {
+                    return options?.preview === false && opened.isPreview
+                        ? prev.map((b) =>
+                              b === opened ? { ...b, isPreview: false } : b,
+                          )
+                        : prev;
+                }
                 const nextBuffers = [...prev];
                 const existingPreviewIndex = nextBuffers.findIndex(
                     (b) => b.isPreview,
@@ -680,6 +747,9 @@ export function useEditorBuffers({
         closeBuffer,
         createUntitledFile,
         deleteFile,
+        detachBuffer,
+        moveBuffer,
+        setSharedText,
         dismissSaveConflict,
         formatFileLabel,
         handlePatchChange,
