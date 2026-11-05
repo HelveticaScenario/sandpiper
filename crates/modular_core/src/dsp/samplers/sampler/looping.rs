@@ -1,37 +1,67 @@
-use super::{Sampler, voice::Voice};
+use super::{
+    Sampler,
+    voice::{Ramp, Release, Voice, push_release},
+};
 
 impl Sampler {
     /// Repeat at the window edge the main voice is heading for. The next
     /// pass enters the next window exactly when the old pass reaches the
     /// edge, so the period is the window length. Around that instant they
     /// crossfade: the next pass fades in over `pre` frames of audio outside
-    /// the next window's entry edge, and the old pass, as the release voice,
+    /// the next window's entry edge, and the old pass, as a release voice,
     /// fades out over the same frames plus `post` frames run on past its
     /// edge. The two ramps sum to unity. Each side is capped by the audio the
     /// file has there and by half of either window, so a crossfade always
     /// ends before the next seam. A next window that continues the audio the
     /// old pass leaves (the adjacent slice, or around the file end) needs no
     /// crossfade.
+    ///
+    /// The next window is picked once, when the pass comes within the
+    /// crossfade's reach of its edge (a fade width, or half the window), and
+    /// held until the seam. An empty pick plays the pass out instead.
     pub(super) fn loop_seam(&mut self, advance: f64, frame_count: usize, max_frame: f64) {
         let (lo, hi) = (self.state.win_lo, self.state.win_hi);
         if hi <= lo || advance == 0.0 {
             return;
         }
-        let (next_lo, next_hi) = self.window(frame_count, max_frame);
+        let forward = advance > 0.0;
+        let w = self.state.fade_frames;
+        let p = self.state.main.position;
+        // A pass that turns back while in a seam's pre-roll is already past
+        // the edge it now heads for; it fades out by its own ramp and the
+        // held gate starts a fresh pass.
+        let behind = if forward {
+            p - advance > hi
+        } else {
+            p - advance < lo
+        };
+        if behind {
+            return;
+        }
+        let reach = w.min((hi - lo) * 0.5);
+        if (forward && p < hi - reach) || (!forward && p >= lo + reach) {
+            self.state.next_win = None;
+            return;
+        }
+        let (next_lo, next_hi) = match self.state.next_win {
+            Some(win) => win,
+            None => {
+                let win = self.window(frame_count, max_frame);
+                self.state.next_win = Some(win);
+                win
+            }
+        };
         let next_span = next_hi - next_lo;
         if next_span <= 0.0 {
-            self.state.playing_out = true;
             self.end_loop(advance, max_frame);
             return;
         }
-        let forward = advance > 0.0;
         let file_end = frame_count as f64;
         let contiguous = if forward {
             next_lo == hi || (hi == file_end && next_lo == 0.0)
         } else {
             next_hi == lo || (lo == 0.0 && next_hi == file_end)
         };
-        let w = self.state.fade_frames;
         let cap = if contiguous {
             0.0
         } else {
@@ -51,76 +81,53 @@ impl Sampler {
         let pre = cap.min(pre_room);
         let post = (cap - pre).min(post_room);
         let xfade = pre + post;
-        let p = main.position;
         let next = if forward {
-            main.hi_ramp = pre;
+            main.hi_ramp = Ramp::Frames(pre);
             if p < hi - pre {
                 return;
             }
             main.hi += post;
-            main.hi_ramp = xfade;
+            main.hi_ramp = Ramp::Frames(xfade);
             Voice {
                 position: next_lo - pre + (p - (hi - pre)).rem_euclid(next_span),
                 lo: next_lo - pre,
                 hi: next_hi,
-                lo_ramp: xfade,
-                hi_ramp: w,
+                lo_ramp: Ramp::Frames(xfade),
+                hi_ramp: Ramp::Frames(0.0),
                 wrap_reads: next_hi > max_frame,
             }
         } else {
-            main.lo_ramp = pre;
+            main.lo_ramp = Ramp::Frames(pre);
             if p >= lo + pre {
                 return;
             }
             main.lo -= post;
-            main.lo_ramp = xfade;
+            main.lo_ramp = Ramp::Frames(xfade);
             Voice {
                 position: next_hi + pre - (lo + pre - p).rem_euclid(next_span),
                 lo: next_lo,
                 hi: next_hi + pre,
-                lo_ramp: w,
-                hi_ramp: xfade,
+                lo_ramp: Ramp::Frames(0.0),
+                hi_ramp: Ramp::Frames(xfade),
                 wrap_reads: next_hi > max_frame,
             }
         };
         if xfade > 0.0 {
-            self.state.rel = *main;
-            self.state.rel_timed = false;
-            self.state.rel_active = true;
+            let release = Release::new(*main, false, self.state.fade_out_samples, advance);
+            push_release(&mut self.state.rels, release);
         }
         self.state.main = next;
         self.state.win_lo = next_lo;
         self.state.win_hi = next_hi;
+        self.state.next_win = None;
     }
 
-    /// When a loop pass stops repeating, it plays out with the full fade at
-    /// the edge it is heading for. Its gain on that side is unity (a seam
-    /// ramp hands over to the release voice as soon as it starts),
-    /// so the ramp starts at the current position at the latest; when the
-    /// edge is closer than a fade width, the voice runs past it into the
-    /// audio that follows, as far as the file allows.
+    /// Stop repeating: the current pass plays out with the full fade at the
+    /// edge it is heading for.
     pub(super) fn end_loop(&mut self, advance: f64, max_frame: f64) {
-        let w = self.state.fade_frames;
-        let main = &mut self.state.main;
-        let p = main.position;
-        if advance >= 0.0 {
-            let limit = if main.wrap_reads {
-                f64::INFINITY
-            } else {
-                max_frame
-            };
-            let end = main.hi.max((p + w).min(limit));
-            main.hi_ramp = end - (end - w).max(p);
-            main.hi = end;
-        } else {
-            let limit = if main.wrap_reads {
-                f64::NEG_INFINITY
-            } else {
-                0.0
-            };
-            let end = main.lo.min((p - w).max(limit));
-            main.lo_ramp = (end + w).min(p) - end;
-            main.lo = end;
-        }
+        self.state.playing_out = true;
+        self.state
+            .main
+            .play_out(advance >= 0.0, self.state.fade_frames, max_frame);
     }
 }

@@ -25561,7 +25561,7 @@
   },
   {
     "name": "$sampler",
-    "documentation": "One-shot sample player. Each gate rising edge starts playback of the whole\nfile, or of one slice when `slice` is set: the slice signal is sampled at\nthe edge — integer part picks the slice point (wrapping), fraction offsets\nthe start into it. Speed control allows pitch-shifting and reverse\nplayback (a slice plays the same region backwards). A short `fade`\n(milliseconds) declicks onsets, slice ends, and retriggers. With `loop`,\nthe window repeats for as long as the gate stays high.\n\n```js\n$sampler($wavs().kick, $pulse('4hz'))\n$sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })\n$sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })\n$sampler($wavs().pad, $pulse('0.5hz'), { loop: true, fade: 10 })\n```",
+    "documentation": "One-shot sample player. Each gate rising edge starts playback of the whole\nfile, or of one slice when `slice` is set: the slice signal is sampled at\nthe edge — integer part picks the slice point (wrapping), fraction offsets\nthe start into it. Speed control allows pitch-shifting and reverse\nplayback (a slice plays the same region backwards). A short `fade`\n(milliseconds) declicks onsets, slice ends, and retriggers. With `loop`,\nthe window repeats for as long as the gate stays high, picking the slice\nagain for each repeat.\n\n```js\n$sampler($wavs().kick, $pulse('4hz'))\n$sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })\n$sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })\n$sampler($wavs().pad, $pulse('0.5hz'), { loop: true, fade: 10 })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "SamplerParams",
@@ -25574,7 +25574,7 @@
           "default": 1.0
         },
         "gate": {
-          "description": "Gate input — rising edge starts playback from the beginning; with\n`loop`, holding it high keeps the window repeating.",
+          "description": "Gate input — rising edge starts playback of the selected window;\nwith `loop`, holding it high keeps it repeating.",
           "$ref": "#/$defs/MonoSignal"
         },
         "loop": {
@@ -25583,7 +25583,7 @@
           "default": false
         },
         "slice": {
-          "description": "Slice selector: a mono signal (whole file as one slice) or\n`[points, signal]` where points are fractions of the total length in\n[0, 1]. Sampled at each gate rising edge and each loop repeat: the\ninteger part picks the slice (wrapping), the fraction offsets the\nstart into it.",
+          "description": "Slice selector: a mono signal (whole file as one slice) or\n`[points, signal]` where points are fractions of the total length in\n[0, 1]. Sampled at each gate rising edge and, while looping, once\nper repeat as the pass comes within a fade width of its end: the\ninteger part picks the slice (wrapping), the fraction offsets the\nstart into it.",
           "anyOf": [
             {
               "anyOf": [
@@ -25729,7 +25729,7 @@
     "signalParams": [
       {
         "name": "gate",
-        "description": "Gate input — rising edge starts playback from the beginning; with\n`loop`, holding it high keeps the window repeating.",
+        "description": "Gate input — rising edge starts playback of the selected window;\nwith `loop`, holding it high keeps it repeating.",
         "signalType": "gate",
         "defaultValue": 0.0,
         "minValue": 0.0,

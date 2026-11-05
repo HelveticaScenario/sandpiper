@@ -10,7 +10,7 @@ use crate::{
     types::Signal,
 };
 
-/// Slice points plus the mono signal that picks a slice at each gate onset.
+/// Slice points plus the mono signal that picks which slice plays.
 ///
 /// Accepts either a bare Mono<Signal> (shorthand for `[[0], Mono<Signal>]` — one slice
 /// spanning the whole file) or a `[points, Mono<Signal>]` tuple. Points are

@@ -1,7 +1,7 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use self::voice::Voice;
+use self::voice::{RELEASE_SLOTS, Ramp, Release, Voice, push_release};
 use super::slice::SliceParam;
 use crate::{
     Wav,
@@ -31,8 +31,8 @@ const MAX_FADE_MS: f64 = 1000.0;
 #[deserr(rename_all = camelCase, deny_unknown_fields, validate = sampler_validate_params -> ModuleParamErrors)]
 struct SamplerParams {
     wav: Wav,
-    /// Gate input — rising edge starts playback from the beginning; with
-    /// `loop`, holding it high keeps the window repeating.
+    /// Gate input — rising edge starts playback of the selected window;
+    /// with `loop`, holding it high keeps it repeating.
     #[signal(type = gate, range = (0.0, 5.0))]
     gate: MonoSignal,
     /// Playback speed. 1.0 = normal, 2.0 = double speed, negative = reverse.
@@ -41,7 +41,8 @@ struct SamplerParams {
     speed: Option<MonoSignal>,
     /// Slice selector: a mono signal (whole file as one slice) or
     /// `[points, signal]` where points are fractions of the total length in
-    /// [0, 1]. Sampled at each gate rising edge and each loop repeat: the
+    /// [0, 1]. Sampled at each gate rising edge and, while looping, once
+    /// per repeat as the pass comes within a fade width of its end: the
     /// integer part picks the slice (wrapping), the fraction offsets the
     /// start into it.
     #[deserr(default)]
@@ -95,31 +96,25 @@ struct SamplerState {
     /// connect(), so this is computed in on_patch_update, not init. Constant
     /// until the next patch update.
     rate_ratio: f64,
-    /// Playback window in WAV frames, sampled at the gate rising edge. A
-    /// playing voice keeps its trigger-time window across patch updates.
+    /// The current pass's window in WAV frames, picked when the pass
+    /// starts. A playing voice keeps it across patch updates.
     win_lo: f64,
     win_hi: f64,
+    /// The next loop pass's window, picked as the seam comes in reach.
+    next_win: Option<(f64, f64)>,
     /// Declick ramp width in WAV frames (fade seconds × wav rate).
     /// Param+wav-derived, so computed in on_patch_update; 0 disables fades.
     fade_frames: f64,
     /// Retrigger release-voice ramp length in output samples (fade seconds ×
     /// engine rate). Param-derived, so computed in on_patch_update.
     fade_out_samples: u32,
-    /// Release voice: on a retrigger or a loop seam the previous playback
-    /// keeps sounding at a fading gain so the jump doesn't click.
-    rel_active: bool,
-    rel: Voice,
-    rel_countdown: u32,
+    rels: [Release; RELEASE_SLOTS],
     /// The main pass ends at its window edge instead of repeating: always
     /// for a one-shot, and for a loop pass once the gate falls, `loop` turns
     /// off, or the next slice is empty. Its closing fade is set when this
     /// becomes true. A gate still holding a loop open starts a new pass once
     /// this one is done.
     playing_out: bool,
-    /// Whether the release voice also ramps down over `fade_out_samples`.
-    /// A loop-seam release fades by its span ramp alone, which mirrors the
-    /// new pass's fade-in so the two sum to unity.
-    rel_timed: bool,
 }
 
 /// One-shot sample player. Each gate rising edge starts playback of the whole
@@ -128,7 +123,8 @@ struct SamplerState {
 /// the start into it. Speed control allows pitch-shifting and reverse
 /// playback (a slice plays the same region backwards). A short `fade`
 /// (milliseconds) declicks onsets, slice ends, and retriggers. With `loop`,
-/// the window repeats for as long as the gate stays high.
+/// the window repeats for as long as the gate stays high, picking the slice
+/// again for each repeat.
 ///
 /// ```js
 /// $sampler($wavs().kick, $pulse('4hz'))
@@ -168,18 +164,17 @@ impl Sampler {
         let speed = self.params.speed.value_or(1.0) as f64;
         let advance = speed * self.state.rate_ratio;
         if edge.is_rising() {
-            // Demote the current voice to the release voice so the jump to
-            // the new onset crossfades instead of clicking. A retrigger
-            // during an active release simply steals the slot. `playing`
-            // lags the position by one sample (the span-exit check runs
-            // after edge detection), so also require the position to still
-            // be in the span: an exited voice is silent and must not
-            // displace a live release.
+            // Demote the current voice to a release voice so the jump to
+            // the new onset crossfades instead of clicking. `playing` lags
+            // the position by one sample (the span-exit check runs after
+            // edge detection), so also require the position to still be in
+            // the span: an exited voice is silent and must not displace a
+            // live release. The gate was low on the previous sample, so a
+            // loop pass already has its closing fade.
             if self.state.playing && self.state.main.in_span() && self.state.fade_out_samples > 0 {
-                self.state.rel = self.state.main;
-                self.state.rel_countdown = self.state.fade_out_samples;
-                self.state.rel_timed = true;
-                self.state.rel_active = true;
+                let release =
+                    Release::new(self.state.main, true, self.state.fade_out_samples, advance);
+                push_release(&mut self.state.rels, release);
             }
             let (lo, hi) = self.window(frame_count, max_frame);
             self.start_pass(lo, hi, speed, max_frame);
@@ -190,7 +185,6 @@ impl Sampler {
             if holding {
                 self.loop_seam(advance, frame_count, max_frame);
             } else {
-                self.state.playing_out = true;
                 self.end_loop(advance, max_frame);
             }
         } else if holding && !self.state.playing {
@@ -202,35 +196,24 @@ impl Sampler {
             }
         }
 
+        let fade = self.state.fade_frames;
         let mut main_gain = 0.0;
         if self.state.playing {
             if self.state.main.in_span() {
-                main_gain = self.state.main.gain();
+                main_gain = self.state.main.gain(fade);
             } else {
                 self.state.playing = false;
             }
         }
 
-        let mut rel_gain = 0.0;
-        if self.state.rel_active {
-            if (self.state.rel_timed && self.state.rel_countdown == 0) || !self.state.rel.in_span()
-            {
-                self.state.rel_active = false;
-            } else {
-                // Time-based ramp-down bounds the ring-out to the fade time
-                // regardless of speed; clamped because a patch update can
-                // shrink fade_out_samples mid-release.
-                let t = if self.state.rel_timed {
-                    (self.state.rel_countdown as f64 / self.state.fade_out_samples.max(1) as f64)
-                        .min(1.0) as f32
-                } else {
-                    1.0
-                };
-                rel_gain = self.state.rel.gain() * t;
-            }
+        let fade_out_samples = self.state.fade_out_samples;
+        let mut rel_gains = [0.0; RELEASE_SLOTS];
+        for (gain, rel) in rel_gains.iter_mut().zip(&mut self.state.rels) {
+            *gain = rel.gain(fade, fade_out_samples);
         }
+        let any_rel = self.state.rels.iter().any(|r| r.active);
 
-        if !self.state.playing && !self.state.rel_active {
+        if !self.state.playing && !any_rel {
             for ch in 0..channels {
                 self.outputs.sample.set(ch, 0.0);
             }
@@ -245,8 +228,10 @@ impl Sampler {
                 // Expected range of wav is -1.0 to 1.0, multiply by 5 to get to oscillator level
                 value += self.state.main.read(samples) * 5.0 * main_gain;
             }
-            if self.state.rel_active {
-                value += self.state.rel.read(samples) * 5.0 * rel_gain;
+            for (rel, &gain) in self.state.rels.iter().zip(&rel_gains) {
+                if rel.active {
+                    value += rel.voice.read(samples) * 5.0 * gain;
+                }
             }
             self.outputs.sample.set(ch, value);
         }
@@ -256,27 +241,36 @@ impl Sampler {
         if self.state.playing {
             self.state.main.position += advance;
         }
-        if self.state.rel_active {
-            self.state.rel.position += advance;
-            self.state.rel_countdown = self.state.rel_countdown.saturating_sub(1);
+        for rel in &mut self.state.rels {
+            rel.advance(advance, fade_out_samples);
         }
     }
 
-    /// Start a fresh main pass over `[lo, hi]` with onset fades at both
-    /// edges. Reverse playback enters through the window's far edge: the same
-    /// audible region, played backwards.
+    /// Start a fresh main pass over `[lo, hi]`. Reverse playback enters
+    /// through the window's far edge: the same audible region, played
+    /// backwards.
     fn start_pass(&mut self, lo: f64, hi: f64, speed: f64, max_frame: f64) {
-        let w = self.state.fade_frames;
         self.state.win_lo = lo;
         self.state.win_hi = hi;
+        self.state.next_win = None;
         self.state.main = Voice {
             position: if speed < 0.0 { hi } else { lo },
             lo,
             hi,
-            lo_ramp: w,
-            hi_ramp: w,
+            lo_ramp: Ramp::Fade,
+            hi_ramp: Ramp::Fade,
             wrap_reads: hi > max_frame,
         };
+        // Both edges fade by default. A loop pass sounds at full gain up to
+        // the edge it heads for instead: the seam's crossfade, or the
+        // play-out fade, sets that ramp.
+        if self.params.looping {
+            if speed < 0.0 {
+                self.state.main.lo_ramp = Ramp::Frames(0.0);
+            } else {
+                self.state.main.hi_ramp = Ramp::Frames(0.0);
+            }
+        }
         self.state.playing = true;
         self.state.playing_out = !self.params.looping;
     }
