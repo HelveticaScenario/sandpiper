@@ -12,6 +12,7 @@ mod midi;
 mod panic_log;
 mod params_cache;
 mod recording;
+mod session_clock;
 mod validation;
 mod wav_bpm;
 mod wav_metadata;
@@ -63,6 +64,14 @@ pub fn get_reserved_output_names() -> Vec<String> {
         .iter()
         .map(|s| s.to_string())
         .collect()
+}
+
+/// Monotonic microseconds since a process-wide epoch: the host clock the
+/// session clock runs on. Session time is this value plus the
+/// `offsetMicros` passed to `Synthesizer.setSessionClock`.
+#[napi]
+pub fn session_clock_micros() -> i64 {
+    session_clock::session_clock_micros()
 }
 
 /// Whether this CPU has every x86 extension the addon was compiled to assume
@@ -1162,6 +1171,40 @@ impl Synthesizer {
         self.state.request_stop();
     }
 
+    /// Start playback once the session clock's bar position reaches `bar`,
+    /// counting the song's bars from it. Starts like a plain start when no
+    /// session clock is active.
+    #[napi]
+    pub fn start_at_bar(&mut self, bar: i64) -> Result<()> {
+        self.state.send_command(GraphCommand::StartAtBar(bar))
+    }
+
+    /// Install or update the session clock, or remove it with `null`. While
+    /// active it drives ROOT_CLOCK in place of Ableton Link. Updating an
+    /// active clock (e.g. a refined offset) keeps its timing continuous.
+    #[napi]
+    pub fn set_session_clock(
+        &self,
+        config: Option<session_clock::SessionClockConfig>,
+    ) -> Result<()> {
+        let update = match config {
+            Some(config) => {
+                config.validate()?;
+                // Fix the epoch on the main thread before the audio thread reads it.
+                session_clock::session_clock_micros();
+                Some((config, rusty_link::HostTimeFilter::new()))
+            }
+            None => None,
+        };
+        let active = update.is_some();
+        self.state
+            .send_command(GraphCommand::SetSessionClock(update))?;
+        self.state
+            .transport_meter
+            .write_session_state(active, 0.0, false);
+        Ok(())
+    }
+
     /// Discard the queued patch update so the playing patch keeps running. The
     /// outcome surfaces in the transport snapshot: `last_cancelled_update_id`
     /// reports the discarded update, and nothing changes if the update already
@@ -1287,6 +1330,7 @@ impl Synthesizer {
         mut patch: PatchGraph,
         trigger: Option<QueuedTrigger>,
         reset_clock: Option<bool>,
+        at_bar: Option<i64>,
     ) -> PatchUpdateResult {
         // Drain deferred deallocations from the audio thread
         self.state.drain_garbage();
@@ -1294,12 +1338,16 @@ impl Synthesizer {
         let reset_clock = reset_clock.unwrap_or(false);
         let trigger = trigger.unwrap_or(QueuedTrigger::Immediate);
 
-        // Under Ableton Link, a buffer switch (reset_clock) must land on a Link bar
-        // boundary so the incoming song aligns to the shared timeline. Force the
-        // quantized NextBar trigger regardless of what the caller requested; the
-        // apply then resets ROOT_CLOCK's bar (loop) index to zero (see
-        // `apply_patch_update`). Without Link the caller's trigger stands.
-        let trigger = if reset_clock && self.state.transport_meter.read_link_enabled() {
+        // Under Ableton Link or the session clock, a buffer switch (reset_clock)
+        // must land on a bar boundary so the incoming song aligns to the shared
+        // timeline. Force the quantized NextBar trigger regardless of what the
+        // caller requested; the apply then restarts ROOT_CLOCK's bar count (see
+        // `apply_patch_update`). An `at_bar` update carries NextBar too, which
+        // stands whenever no session clock is active. Otherwise the caller's
+        // trigger stands.
+        let external_clock = self.state.transport_meter.read_link_enabled()
+            || self.state.transport_meter.read_session_clock_active();
+        let trigger = if at_bar.is_some() || (reset_clock && external_clock) {
             QueuedTrigger::NextBar
         } else {
             trigger
@@ -1365,6 +1413,7 @@ impl Synthesizer {
             wav_data_snapshot,
             transport_meta,
             reset_clock,
+            at_bar,
         );
 
         PatchUpdateResult {

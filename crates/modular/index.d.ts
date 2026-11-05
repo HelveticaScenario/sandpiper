@@ -9,6 +9,18 @@ export declare class Synthesizer {
   constructor(config?: AudioConfigOptions | undefined | null)
   stop(): void
   /**
+   * Start playback once the session clock's bar position reaches `bar`,
+   * counting the song's bars from it. Starts like a plain start when no
+   * session clock is active.
+   */
+  startAtBar(bar: number): void
+  /**
+   * Install or update the session clock, or remove it with `null`. While
+   * active it drives ROOT_CLOCK in place of Ableton Link. Updating an
+   * active clock (e.g. a refined offset) keeps its timing continuous.
+   */
+  setSessionClock(config?: SessionClockConfig | undefined | null): void
+  /**
    * Discard the queued patch update so the playing patch keeps running. The
    * outcome surfaces in the transport snapshot: `last_cancelled_update_id`
    * reports the discarded update, and nothing changes if the update already
@@ -63,7 +75,7 @@ export declare class Synthesizer {
    * of statistical smoothing in the UI.
    */
   setModuleProfilingSampleRate(rate: number): void
-  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null): PatchUpdateResult
+  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null, atBar?: number | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
   /**
@@ -349,6 +361,34 @@ export interface RecordingResult {
   droppedSamples: number
 }
 
+/** The session clock as configured by the network layer. */
+export interface SessionClockConfig {
+  /** Session time minus host time (`sessionClockMicros()`), in microseconds. */
+  offsetMicros: number
+  timeline: SessionTimeline
+  /** Replaces `timeline` once session time reaches its `anchor_micros`. */
+  pending?: SessionTimeline
+}
+
+/**
+ * Monotonic microseconds since a process-wide epoch: the host clock the
+ * session clock runs on. Session time is this value plus the
+ * `offsetMicros` passed to `Synthesizer.setSessionClock`.
+ */
+export declare function sessionClockMicros(): number
+
+/** A linear mapping from session time to bar position. */
+export interface SessionTimeline {
+  /** Session time (microseconds) at which the bar position is `anchor_bar`. */
+  anchorMicros: number
+  /** Bar position at `anchor_micros`. */
+  anchorBar: number
+  /** Tempo in quarter notes per minute. */
+  bpm: number
+  /** Quarter notes per bar. */
+  barBeats: number
+}
+
 export interface TransportSnapshot {
   /** Current bar phase (0..1 over one bar) */
   barPhase: number
@@ -385,6 +425,21 @@ export interface TransportSnapshot {
    * flipping `is_playing`. Only meaningful when `link_enabled` is true.
    */
   linkPendingStart: boolean
+  /** Whether the session clock drives the transport */
+  sessionClockActive: boolean
+  /**
+   * Session bar position (bar number plus phase) at the latest audio
+   * callback. Only meaningful when `session_clock_active` is true.
+   */
+  sessionBar: number
+  /** Armed for a session-clock start, waiting for its bar */
+  sessionPendingStart: boolean
+  /**
+   * The update_id of the most recent `atBar` update that applied a bar late
+   * because its bar had already begun when it reached the audio thread (as
+   * f64 for N-API compatibility). 0 when none has.
+   */
+  lastLateUpdateId: number
 }
 
 /**

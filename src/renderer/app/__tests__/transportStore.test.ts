@@ -32,6 +32,10 @@ function makeSnapshot(
         linkPeers: 0,
         linkPhase: 0,
         linkPendingStart: false,
+        sessionClockActive: false,
+        sessionBar: 0,
+        sessionPendingStart: false,
+        lastLateUpdateId: 0,
         ...overrides,
     };
 }
