@@ -39,6 +39,10 @@ describe('normalizeSessionPath', () => {
         'trailing.',
         'trailing ',
         'x'.repeat(600),
+        'nul.js',
+        'CON',
+        'dir/com1.txt',
+        'LPT9.mjs',
     ])('rejects %j', (input) => {
         expect(normalizeSessionPath(input)).toBeNull();
     });

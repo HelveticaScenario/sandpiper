@@ -48,7 +48,7 @@ export class SharedDoc {
             );
             for (const peer of this.mesh.peers()) {
                 if (peer.id !== origin) {
-                    this.mesh.send(peer.id, Channel.Doc, message);
+                    this.trySend(peer.id, Channel.Doc, message);
                 }
             }
             if (origin !== RENDERER_ORIGIN) {
@@ -82,7 +82,7 @@ export class SharedDoc {
             }
             for (const peer of this.mesh.peers()) {
                 if (peer.id !== origin) {
-                    this.mesh.send(peer.id, Channel.Awareness, update);
+                    this.trySend(peer.id, Channel.Awareness, update);
                 }
             }
         };
@@ -157,13 +157,22 @@ export class SharedDoc {
     }
 
     private greet(peerId: string): void {
-        this.mesh.send(
+        this.trySend(
             peerId,
             Channel.Doc,
             encodeSync((encoder) => syncProtocol.writeSyncStep1(encoder, this.doc)),
         );
         if (this.awareness.getStates().size > 0) {
-            this.mesh.send(peerId, Channel.Awareness, this.encodeAllAwareness());
+            this.trySend(peerId, Channel.Awareness, this.encodeAllAwareness());
+        }
+    }
+
+    /** Send to one peer; a failure is logged so it cannot stop the others. */
+    private trySend(peerId: string, channel: ChannelId, payload: Uint8Array): void {
+        try {
+            this.mesh.send(peerId, channel, payload);
+        } catch (error) {
+            console.warn('[session] could not send to a peer', error);
         }
     }
 
@@ -173,7 +182,7 @@ export class SharedDoc {
             const reply = encoding.createEncoder();
             syncProtocol.readSyncMessage(decoder, reply, this.doc, peerId);
             if (encoding.length(reply) > 0) {
-                this.mesh.send(peerId, Channel.Doc, encoding.toUint8Array(reply));
+                this.trySend(peerId, Channel.Doc, encoding.toUint8Array(reply));
             }
         } catch (error) {
             console.warn('[session] dropped a malformed sync message', error);

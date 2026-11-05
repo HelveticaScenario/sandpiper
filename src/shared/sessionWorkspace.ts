@@ -18,6 +18,11 @@ export type FileKind = 'text' | 'dir';
 
 export const MAX_SHARED_TEXT_BYTES = 1024 * 1024;
 export const MAX_SHARED_FILES = 2000;
+/**
+ * Total shared text. A joining peer receives the whole document in one
+ * message, which must stay under the session's frame limit.
+ */
+export const MAX_SHARED_TOTAL_TEXT_BYTES = 24 * 1024 * 1024;
 const MAX_PATH_LENGTH = 512;
 
 /** Extensions shared as live-editable text; other files stay local. */
@@ -99,6 +104,7 @@ export function normalizeSessionPath(input: string): string | null {
             segment === '..' ||
             segment.startsWith('.') ||
             hasForbiddenCharacter(segment) ||
+            isReservedDeviceName(segment) ||
             segment.endsWith(' ') ||
             segment.endsWith('.')
         ) {
@@ -106,6 +112,13 @@ export function normalizeSessionPath(input: string): string | null {
         }
     }
     return segments.join('/');
+}
+
+/** Names Windows reserves for devices, with or without an extension. */
+const RESERVED_DEVICE_NAMES = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
+
+function isReservedDeviceName(segment: string): boolean {
+    return RESERVED_DEVICE_NAMES.test(segment);
 }
 
 /** Characters Windows forbids in file names, including control characters. */

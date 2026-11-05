@@ -5,6 +5,7 @@ import {
     type FileEntry,
     MAX_SHARED_FILES,
     MAX_SHARED_TEXT_BYTES,
+    MAX_SHARED_TOTAL_TEXT_BYTES,
     applyTextDiff,
     createDirEntry,
     createTextEntry,
@@ -136,9 +137,10 @@ export class WorkspaceMirror {
      */
     write(
         absolutePath: string,
-        content: string,
+        rawContent: string,
         { replace = false }: { replace?: boolean } = {},
     ): boolean {
+        const content = normalizeLineEndings(rawContent);
         const shared = this.entryAt(absolutePath);
         if (shared?.kind === 'text') {
             if (replace && shared.text) {
@@ -149,12 +151,7 @@ export class WorkspaceMirror {
             return true;
         }
         const rel = this.relative(absolutePath);
-        if (
-            !rel ||
-            !isSharedTextPath(rel) ||
-            Buffer.byteLength(content) > MAX_SHARED_TEXT_BYTES ||
-            listEntries(this.doc).length >= MAX_SHARED_FILES
-        ) {
+        if (!rel || !isSharedTextPath(rel) || !this.hasRoomFor(content)) {
             return false;
         }
         this.doc.transact(() => {
@@ -181,6 +178,19 @@ export class WorkspaceMirror {
         if (moving.length === 0) {
             return false;
         }
+        // A rename that only changes case is the same directory entry on a
+        // case-insensitive disk; renaming it through a temporary name gives
+        // the folder its new spelling there.
+        const caseOnly =
+            from !== to && from.toLowerCase() === to.toLowerCase();
+        if (caseOnly && fs.existsSync(fromAbsolute)) {
+            const temp = path.join(
+                path.dirname(fromAbsolute),
+                `.shoreline-rename-${Date.now()}`,
+            );
+            fs.renameSync(fromAbsolute, temp);
+            fs.renameSync(temp, toAbsolute);
+        }
         this.doc.transact(() => {
             const map = filesMap(this.doc);
             for (const entry of moving) {
@@ -189,7 +199,7 @@ export class WorkspaceMirror {
         }, MIRROR_ORIGIN);
         this.reconcileNow();
         // Unshared files under a moved folder follow it on disk.
-        if (fs.existsSync(fromAbsolute)) {
+        if (!caseOnly && fs.existsSync(fromAbsolute)) {
             fs.mkdirSync(path.dirname(toAbsolute), { recursive: true });
             mergeMove(fromAbsolute, toAbsolute);
         }
@@ -227,6 +237,23 @@ export class WorkspaceMirror {
         this.reconcileNow();
     }
 
+    /** Whether one more file of `content` fits within the session's limits. */
+    private hasRoomFor(content: string): boolean {
+        const bytes = Buffer.byteLength(content);
+        if (bytes > MAX_SHARED_TEXT_BYTES) {
+            return false;
+        }
+        const entries = listEntries(this.doc);
+        if (entries.length >= MAX_SHARED_FILES) {
+            return false;
+        }
+        const total = entries.reduce(
+            (sum, e) => sum + (e.text ? Buffer.byteLength(e.text.toJSON()) : 0),
+            0,
+        );
+        return total + bytes <= MAX_SHARED_TOTAL_TEXT_BYTES;
+    }
+
     private entryAt(absolutePath: string): FileEntry | null {
         const rel = this.relative(absolutePath);
         if (!rel) {
@@ -253,6 +280,7 @@ export class WorkspaceMirror {
     private seedFromDisk(): void {
         const found: Array<{ rel: string; content: string } | { dir: string }> =
             [];
+        let totalBytes = 0;
         const walk = (dir: string, relDir: string) => {
             let names: fs.Dirent[];
             try {
@@ -277,7 +305,12 @@ export class WorkspaceMirror {
                     walk(absolute, rel);
                 } else if (dirent.isFile() && isSharedTextPath(rel)) {
                     const content = this.readShareable(absolute, rel);
-                    if (content !== null) {
+                    const bytes = content === null ? 0 : Buffer.byteLength(content);
+                    if (
+                        content !== null &&
+                        totalBytes + bytes <= MAX_SHARED_TOTAL_TEXT_BYTES
+                    ) {
+                        totalBytes += bytes;
                         sawEntry = true;
                         found.push({ content, rel });
                     }
@@ -313,11 +346,9 @@ export class WorkspaceMirror {
             if (!stat.isFile() || stat.size > MAX_SHARED_TEXT_BYTES) {
                 return null;
             }
-            // Editors bind shared text with LF line endings, so offsets in
-            // the document and the editor agree.
-            return this.options
-                .fromDisk(rel, fs.readFileSync(absolute, 'utf8'))
-                .replace(/\r\n?/g, '\n');
+            return normalizeLineEndings(
+                this.options.fromDisk(rel, fs.readFileSync(absolute, 'utf8')),
+            );
         } catch {
             return null;
         }
@@ -329,7 +360,11 @@ export class WorkspaceMirror {
         }
         this.reconcileTimer = setTimeout(() => {
             this.reconcileTimer = null;
-            this.reconcileNow();
+            try {
+                this.reconcileNow();
+            } catch (error) {
+                console.warn('[session] workspace reconcile failed', error);
+            }
         }, RECONCILE_DEBOUNCE_MS);
     }
 
@@ -396,7 +431,13 @@ export class WorkspaceMirror {
             const mirrored = this.mirrored.get(entry.id);
             if (entry.kind === 'dir') {
                 if (!mirrored || mirrored.path !== target) {
-                    fs.mkdirSync(this.absolute(target), { recursive: true });
+                    try {
+                        fs.mkdirSync(this.absolute(target), { recursive: true });
+                    } catch (error) {
+                        // A file stands where a peer put a folder; skip it.
+                        console.warn(`[session] cannot create ${target}`, error);
+                        continue;
+                    }
                     this.mirrored.set(entry.id, {
                         content: '',
                         kind: 'dir',
@@ -463,7 +504,7 @@ export class WorkspaceMirror {
         }
         if (stat.isDirectory()) {
             const covered = listEntries(this.doc).some((e) => isAtOrUnder(e.path, rel));
-            if (!covered && fs.readdirSync(absolute).length === 0) {
+            if (!covered && isEmptyDir(absolute)) {
                 this.doc.transact(() => createDirEntry(this.doc, rel), MIRROR_ORIGIN);
             }
             return;
@@ -490,7 +531,7 @@ export class WorkspaceMirror {
             this.doc.transact(() => applyTextDiff(text, content), MIRROR_ORIGIN);
             return;
         }
-        if (listEntries(this.doc).length >= MAX_SHARED_FILES) {
+        if (!this.hasRoomFor(content)) {
             return;
         }
         let newId = '';
@@ -581,6 +622,22 @@ export class WorkspaceMirror {
                 return true;
             }
         }
+        return false;
+    }
+}
+
+/**
+ * Editors bind shared text with LF line endings, so offsets in the document
+ * and in every editor agree.
+ */
+function normalizeLineEndings(content: string): string {
+    return content.replace(/\r\n?/g, '\n');
+}
+
+function isEmptyDir(absolute: string): boolean {
+    try {
+        return fs.readdirSync(absolute).length === 0;
+    } catch {
         return false;
     }
 }

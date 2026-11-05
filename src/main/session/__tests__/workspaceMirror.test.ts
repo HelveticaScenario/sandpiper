@@ -4,6 +4,7 @@ import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
+    createDirEntry,
     createTextEntry,
     filesMap,
     listEntries,
@@ -347,3 +348,56 @@ describe('WorkspaceMirror local operations', () => {
         expect(listEntries(doc).map((e) => `${e.kind}:${e.path}`)).toEqual(['dir:loops']);
     });
 });
+
+describe('WorkspaceMirror robustness', () => {
+    it('skips a peer folder that collides with a local file and keeps mirroring the rest', async () => {
+        const [a, b] = linkedDocs();
+        const guestRoot = tempDir();
+        write(guestRoot, 'kick.wav', 'RIFF');
+        startMirror(b, guestRoot, false);
+        const hostRoot = tempDir();
+        startMirror(a, hostRoot, false);
+        a.transact(() => {
+            createDirEntry(a, 'kick.wav');
+            createTextEntry(a, 'after.js', 'still here');
+        });
+        await waitFor(() => exists(guestRoot, 'after.js'));
+        expect(read(guestRoot, 'kick.wav')).toBe('RIFF');
+    });
+
+    it('stores saved text with LF line endings', () => {
+        const doc = new Y.Doc();
+        const root = tempDir();
+        const { mirror: m } = startMirror(doc, root, false);
+        m.write(path.join(root, 'win.js'), 'a\r\nb\rc\n');
+        expect(textAt(doc, 'win.js').toJSON()).toBe('a\nb\nc\n');
+        m.write(path.join(root, 'win.js'), 'x\r\ny', { replace: true });
+        expect(textAt(doc, 'win.js').toJSON()).toBe('x\ny');
+    });
+
+    it('renames a folder by case alone', () => {
+        const doc = new Y.Doc();
+        const root = tempDir();
+        write(root, 'drums/kick.js', 'k');
+        const { mirror: m } = startMirror(doc, root, true);
+        expect(m.rename(path.join(root, 'drums'), path.join(root, 'Drums'))).toBe(true);
+        expect(listEntries(doc).map((e) => e.path)).toEqual(['Drums/kick.js']);
+        expect(fs.readdirSync(root)).toContain('Drums');
+        expect(read(root, 'Drums/kick.js')).toBe('k');
+    });
+
+    it('stops adding files once the session holds its total text limit', () => {
+        const doc = new Y.Doc();
+        const root = tempDir();
+        const { mirror: m } = startMirror(doc, root, false);
+        const big = 'x'.repeat(1024 * 1024 - 16);
+        let added = 0;
+        for (let i = 0; i < 30; i++) {
+            if (m.write(path.join(root, `f${i}.txt`), big)) {
+                added++;
+            }
+        }
+        expect(added).toBe(24);
+    });
+});
+

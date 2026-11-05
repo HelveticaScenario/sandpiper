@@ -63,6 +63,12 @@ export class SessionWorkspace {
     }
 
     dispose(): void {
+        // Edits from the last moments of the session still reach the folder.
+        try {
+            this.mirror.reconcileNow();
+        } catch (error) {
+            console.warn('[session] final workspace write failed', error);
+        }
         this.mirror.dispose();
         this.shared.destroy();
     }

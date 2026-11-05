@@ -21,10 +21,11 @@ export type ChannelId = (typeof Channel)[keyof typeof Channel];
 const KNOWN_CHANNELS = new Set<number>(Object.values(Channel));
 
 /**
- * Largest accepted frame body. Assets travel in chunks well under this, so a
- * larger length prefix means a corrupt or hostile stream.
+ * Largest accepted frame body. The biggest message is the whole shared
+ * document sent to a joining peer, which the workspace caps well under this;
+ * a larger length prefix means a corrupt or hostile stream.
  */
-export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
+export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
 const HEADER_BYTES = 5;
 

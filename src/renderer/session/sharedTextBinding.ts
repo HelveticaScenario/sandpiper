@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import type * as monacoNs from 'monaco-editor';
 import type { Awareness } from 'y-protocols/awareness';
+import { applyTextDiff } from '../../shared/sessionWorkspace';
 
 type Monaco = typeof monacoNs;
 type Editor = monacoNs.editor.IStandaloneCodeEditor;
@@ -109,6 +110,18 @@ export class SharedTextBinding {
             this.applyingLocal = true;
             try {
                 this.doc.transact(() => {
+                    // A whole-document replacement (formatting, a reload)
+                    // becomes the smallest equivalent edit, so peers' cursors
+                    // and concurrent edits outside the changed span survive.
+                    const [only] = event.changes;
+                    if (
+                        event.changes.length === 1 &&
+                        only.rangeOffset === 0 &&
+                        only.rangeLength === text.length
+                    ) {
+                        applyTextDiff(text, model.getValue());
+                        return;
+                    }
                     [...event.changes]
                         .sort((a, b) => b.rangeOffset - a.rangeOffset)
                         .forEach((change) => {
@@ -177,7 +190,11 @@ export class SharedTextBinding {
         };
         const selectionListener = editor.onDidChangeCursorSelection(publish);
         const modelListener = editor.onDidChangeModel(() => {
-            publish();
+            if (editor.getModel() === this.model) {
+                publish();
+            } else {
+                this.clearPublishedSelection();
+            }
             this.renderCursors();
         });
         this.editorDisposers.push(
@@ -193,11 +210,33 @@ export class SharedTextBinding {
             return;
         }
         this.destroyed = true;
+        this.clearPublishedSelection();
         this.detachEditor();
         for (const dispose of this.disposers.splice(0)) {
             dispose();
         }
         this.undoManager.destroy();
+    }
+
+    /**
+     * Withdraw the selection this user publishes if it points into this
+     * text, so peers stop drawing a cursor where this user no longer is.
+     */
+    private clearPublishedSelection(): void {
+        const selection = this.awareness.getLocalState()?.selection as
+            | { anchor?: Y.RelativePosition }
+            | null
+            | undefined;
+        if (!selection?.anchor) {
+            return;
+        }
+        const anchor = Y.createAbsolutePositionFromRelativePosition(
+            selection.anchor,
+            this.doc,
+        );
+        if (anchor?.type === this.text) {
+            this.awareness.setLocalStateField('selection', null);
+        }
     }
 
     private detachEditor(): void {
