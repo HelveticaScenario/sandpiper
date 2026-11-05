@@ -144,6 +144,20 @@ function undo(peer: Page): Promise<void> {
     });
 }
 
+function transport(peer: Page): Promise<any> {
+    return peer.evaluate(() =>
+        (window as any).electronAPI.synthesizer.getTransportState(),
+    );
+}
+
+/** The next patch result, waiting for one to exist. */
+async function lastResult(peer: Page): Promise<any> {
+    await eventually(async () =>
+        peer.evaluate(() => Boolean(window.__TEST_API__!.getLastPatchResult())),
+    );
+    return peer.evaluate(() => window.__TEST_API__!.getLastPatchResult());
+}
+
 function workspaceOf(peer: Page): Promise<string> {
     return peer.evaluate(async () => {
         const ws = await (window as any).electronAPI.filesystem.getWorkspace();
@@ -279,5 +293,65 @@ test.describe('live session', () => {
                 .readFileSync(path.join(host.workspace, 'renamed.js'), 'utf8')
                 .includes('// still live'),
         );
+    });
+
+    test('every peer plays a shared evaluation on the same bar, tempo changes included', async () => {
+        const host = await launch({ 'patch.js': '$sine("C3").out()\n' });
+        const guest = await launch({});
+        const invite = await startSession(host.page, 'Ada');
+        await joinSession(guest.page, invite, 'Bo');
+        const guestRoot = await workspaceOf(guest.page);
+        await eventually(() => fs.existsSync(path.join(guestRoot, 'patch.js')));
+        await openFile(host.page, 'patch.js');
+
+        // Both engines follow the session clock once in sync.
+        for (const peer of [host, guest]) {
+            await eventually(async () => (await transport(peer.page)).sessionClockActive);
+        }
+
+        await host.page.evaluate(() => window.__TEST_API__!.executePatch());
+        const hostResult = await lastResult(host.page);
+        expect(hostResult.success).toBe(true);
+        expect(typeof hostResult.sessionAtBar).toBe('number');
+        // The guest builds the same patch from the same source.
+        const guestResult = await lastResult(guest.page);
+        expect(guestResult.success).toBe(true);
+        const ids = (r: any) => r.appliedPatch.modules.map((m: any) => m.id).sort();
+        expect(ids(guestResult)).toEqual(ids(hostResult));
+        // The guest's header names who changed the patch.
+        await expect(guest.page.locator('.session-activity')).toContainText('Ada');
+
+        // Once the bar arrives both are playing it, in phase and on the same
+        // bar count.
+        await eventually(async () => {
+            const [h, g] = await Promise.all([
+                transport(host.page),
+                transport(guest.page),
+            ]);
+            return (
+                !h.hasQueuedUpdate &&
+                !g.hasQueuedUpdate &&
+                h.sessionBar >= hostResult.sessionAtBar &&
+                g.sessionBar >= hostResult.sessionAtBar
+            );
+        });
+        const [h, g] = await Promise.all([transport(host.page), transport(guest.page)]);
+        expect(Math.abs(h.bar + h.barPhase - (g.bar + g.barPhase))).toBeLessThan(0.05);
+        expect(Math.abs(h.sessionBar - g.sessionBar)).toBeLessThan(0.05);
+
+        // A tempo change takes effect for both on the next bar.
+        await host.page.evaluate(() =>
+            window.__TEST_API__!.setEditorValue('$setTempo(150)\n$sine("C3").out()\n'),
+        );
+        await host.page.evaluate(() => window.__TEST_API__!.executePatch());
+        await eventually(async () => {
+            const [ht, gt] = await Promise.all([
+                transport(host.page),
+                transport(guest.page),
+            ]);
+            return ht.bpm === 150 && gt.bpm === 150;
+        });
+        const [h2, g2] = await Promise.all([transport(host.page), transport(guest.page)]);
+        expect(Math.abs(h2.sessionBar - g2.sessionBar)).toBeLessThan(0.05);
     });
 });

@@ -16,7 +16,7 @@ import type {
     PatchGraph,
     QueuedTrigger,
 } from '@modular/core';
-import { Synthesizer } from '@modular/core';
+import { Synthesizer, sessionClockMicros } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { parse as parseJsonc, type ParseError } from 'jsonc-parser';
 import type {
@@ -65,6 +65,12 @@ import { resolveWorkspacePath } from './workspacePaths';
 import { buildCompatKey } from './session/compat';
 import { SessionController, parseBootstrap } from './session/sessionIpc';
 import { SessionWorkspace } from './session/sessionWorkspace';
+import {
+    type SessionEval,
+    SessionPlayback,
+    sessionSourceId,
+} from './session/sessionPlayback';
+import { barBeatsOf } from '../shared/sessionTimeline';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
 import { syphonAction, type SyphonTarget } from './syphon/syphonTarget';
 import { requestCameraAccess, screenSource } from './liveSources';
@@ -961,6 +967,7 @@ function switchWorkspace(root: string) {
 }
 
 let sessionWorkspace: SessionWorkspace | null = null;
+let sessionPlayback: SessionPlayback | null = null;
 sessionController.manager.on('started', (session) => {
     sessionWorkspace = new SessionWorkspace(session, {
         fromDisk: (relativePath, content) =>
@@ -986,8 +993,43 @@ sessionController.manager.on('started', (session) => {
                 ? stampPatchVersionSource(content, app.getVersion())
                 : content,
     });
+    const workspace = sessionWorkspace;
+    sessionPlayback = new SessionPlayback(
+        workspace.shared.doc,
+        session.mesh,
+        session.self,
+        session.role,
+        {
+            currentMeter: () => {
+                const t = synth.getTransportState();
+                return {
+                    barBeats: barBeatsOf(t.timeSigNumerator, t.timeSigDenominator),
+                    bpm: t.bpm > 0 ? t.bpm : 120,
+                };
+            },
+            hostMicros: () => sessionClockMicros(),
+            playRemote: (evaluation: SessionEval) => {
+                const result = runPatchScript(
+                    evaluation.source,
+                    sessionSourceId(evaluation.fileId),
+                    undefined,
+                    evaluation,
+                );
+                sendToMainWindow(IPC_CHANNELS.SESSION_ON_REMOTE_EVAL, {
+                    atBar: evaluation.atBar,
+                    author: evaluation.author,
+                    originBar: evaluation.originBar,
+                    filePath: workspace.mirror.pathOf(evaluation.fileId),
+                    result,
+                });
+            },
+            setSessionClock: (config) => synth.setSessionClock(config),
+        },
+    );
 });
 sessionController.manager.on('ended', () => {
+    sessionPlayback?.dispose();
+    sessionPlayback = null;
     sessionWorkspace?.dispose();
     sessionWorkspace = null;
 });
@@ -1026,11 +1068,18 @@ const videoTapSlots = new VideoTapSlots();
  * update the engine applies while this one is prepared or in flight changes
  * what is playing, so the reconciliation is redone against it.
  */
+/** When a patch plays in a live session: the session bar, and the song's first bar. */
+interface SessionTiming {
+    atBar: number;
+    originBar: number;
+}
+
 function submitPatchUpdate(
     patch: PatchGraph,
     sourceId: string | undefined,
     trigger: QueuedTrigger | undefined,
     video: CompiledVideoShader | null = null,
+    timing?: SessionTiming,
 ) {
     // The DSL's tap slots, which every attempt places afresh.
     const dslSlots = patch.modules
@@ -1119,6 +1168,8 @@ function submitPatchUpdate(
             patch,
             trigger,
             resetClock,
+            timing?.atBar,
+            timing?.originBar,
         );
         if (errors.length > 0) {
             return { errors, moduleIdRemap, updateId, video: placedVideo };
@@ -1147,9 +1198,13 @@ function inWavWorkspace<T>(load: (path: string) => T): (path: string) => T {
     };
 }
 
-registerIPCHandler(
-    'DSL_EXECUTE',
-    (source, sourceId, trigger): DSLExecuteResult => {
+/** Build a patch from DSL source and send it to the engine. */
+function runPatchScript(
+    source: string,
+    sourceId: string | undefined,
+    trigger: QueuedTrigger | undefined,
+    timing?: SessionTiming,
+): DSLExecuteResult {
         try {
             const {
                 patch,
@@ -1204,7 +1259,7 @@ registerIPCHandler(
                 moduleIdRemap,
                 updateId,
                 video: placedVideo,
-            } = submitPatchUpdate(patch, sourceId, trigger, video);
+            } = submitPatchUpdate(patch, sourceId, trigger, video, timing);
 
             if (errors.length > 0) {
                 return {
@@ -1246,6 +1301,29 @@ registerIPCHandler(
                 success: false,
             };
         }
+}
+
+registerIPCHandler(
+    'DSL_EXECUTE',
+    (source, sourceId, trigger, sharedPath): DSLExecuteResult => {
+        // A shared file evaluated in a live session plays for everyone, on
+        // the same bar.
+        const fileId = sharedPath
+            ? (sessionWorkspace?.mirror.fileIdAt(sharedPath) ?? null)
+            : null;
+        const plan = fileId ? (sessionPlayback?.planLocal(fileId) ?? null) : null;
+        if (!plan) {
+            return runPatchScript(source, sourceId, trigger);
+        }
+        const result = runPatchScript(source, plan.sourceId, undefined, plan);
+        if (result.success && result.appliedPatch) {
+            sessionPlayback?.publishLocal(plan, source, result.appliedPatch);
+        }
+        return {
+            ...result,
+            sessionAtBar: plan.atBar,
+            sessionOriginBar: plan.originBar,
+        };
     },
 );
 
