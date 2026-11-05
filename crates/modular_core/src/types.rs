@@ -1088,14 +1088,6 @@ impl SampleBuffer {
         hermite_clamped(self.channel(channel), frame)
     }
 
-    /// Hermite read treating the buffer as a ring: the position and its
-    /// neighbours wrap modulo the frame count (for looped playback).
-    /// Allocation-free; safe for the audio thread.
-    #[inline]
-    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
-        hermite_wrapped(self.channel(channel), frame)
-    }
-
     /// One channel's samples; empty for a channel the buffer does not have.
     #[inline]
     pub fn channel(&self, channel: usize) -> &[f32] {
@@ -1255,12 +1247,6 @@ impl WavData {
         self.buffer.read_hermite_clamped(channel, frame)
     }
 
-    /// Hermite-interpolated read wrapping around the file (for looping).
-    #[inline]
-    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
-        self.buffer.read_hermite_wrapped(channel, frame)
-    }
-
     /// One channel's samples; empty for a channel the file does not have.
     #[inline]
     pub fn channel(&self, channel: usize) -> &[f32] {
@@ -1335,13 +1321,6 @@ impl Wav {
         self.cached_data
             .as_ref()
             .map(|d| d.read_hermite_clamped(channel, frame))
-            .unwrap_or(0.0)
-    }
-
-    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
-        self.cached_data
-            .as_ref()
-            .map(|d| d.read_hermite_wrapped(channel, frame))
             .unwrap_or(0.0)
     }
 
