@@ -206,13 +206,10 @@ impl SessionClockState {
         }
     }
 
-    /// Audio-callback prologue: capture the buffer's host time and promote a
-    /// pending timeline whose anchor has passed. No-op when inactive.
-    pub fn capture_buffer_state(&mut self, sample_rate: f32) {
-        self.capture_at(session_clock_micros(), sample_rate);
-    }
-
-    pub(crate) fn capture_at(&mut self, host_micros: i64, sample_rate: f32) {
+    /// Audio-callback prologue: capture the buffer's host time from the
+    /// host clock reading `host_micros` ([`session_clock_micros`]) and promote
+    /// a pending timeline whose anchor has passed. No-op when inactive.
+    pub fn capture_at(&mut self, host_micros: i64, sample_rate: f32) {
         let (Some(config), Some(filter)) = (self.config.as_mut(), self.filter.as_mut()) else {
             self.buffer = None;
             return;
@@ -295,31 +292,38 @@ impl SessionClockState {
         self.pending_start = None;
     }
 
-    /// Release a pending start whose bar has arrived at the buffer's first
-    /// frame. Returns `true` exactly once and sets the transport origin to
-    /// the start bar; the caller flips the stopped flag and dispatches
-    /// `Clock::Start`.
-    pub fn check_pending_start_release(&mut self) -> bool {
-        let Some(pending) = self.pending_start else {
-            return false;
+    #[inline]
+    pub fn pending_start_armed(&self) -> bool {
+        self.pending_start.is_some()
+    }
+
+    /// Pin a next-bar start to the bar after the buffer's first frame. Called
+    /// once per callback after the capture, so the target never moves.
+    pub fn resolve_pending_start(&mut self) {
+        if self.pending_start == Some(PendingStart::NextBar)
+            && let Some(position) = self.bar_position(0)
+        {
+            let next = split_bar(position).1 + 1;
+            self.pending_start = Some(PendingStart::AtBar(next));
+        }
+    }
+
+    /// Offset within `[cb_frame, cb_frame + count)` of the first frame whose
+    /// bar position has reached the armed start bar.
+    pub fn pending_start_offset(&self, cb_frame: usize, count: usize) -> Option<usize> {
+        let Some(PendingStart::AtBar(target)) = self.pending_start else {
+            return None;
         };
-        let Some(position) = self.bar_position(0) else {
-            return false;
-        };
-        let target = match pending {
-            PendingStart::AtBar(bar) => bar,
-            PendingStart::NextBar => {
-                let next = split_bar(position).1 + 1;
-                self.pending_start = Some(PendingStart::AtBar(next));
-                next
-            }
-        };
-        if position >= target as f64 {
-            self.pending_start = None;
+        (0..count).find(|&offset| {
+            self.bar_position(cb_frame + offset)
+                .is_some_and(|position| position >= target as f64)
+        })
+    }
+
+    /// Disarm the start once it plays and count the song's bars from its bar.
+    pub fn release_pending_start(&mut self) {
+        if let Some(PendingStart::AtBar(target)) = self.pending_start.take() {
             self.origin_bar = Some(target);
-            true
-        } else {
-            false
         }
     }
 
@@ -515,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn start_at_bar_releases_on_its_bar_and_sets_origin() {
+    fn start_at_bar_finds_its_frame_and_sets_origin() {
         let mut state = active_state(SessionClockConfig {
             offset_micros: 0,
             timeline: timeline(0, 0.0, 120.0, 4.0),
@@ -523,33 +527,34 @@ mod tests {
         });
         state.request_start_at_bar(3);
         state.capture_at(5_990_000, SR); // bar 2.995
-        assert!(!state.check_pending_start_release());
-        state.add_samples(480);
-        state.capture_at(6_000_000, SR); // bar 3.0
-        assert!(state.check_pending_start_release());
+        state.resolve_pending_start();
+        // 10 ms is 480 frames: bar 3 begins at frame 480.
+        assert_eq!(state.pending_start_offset(0, 480), None);
+        assert_eq!(state.pending_start_offset(0, 512), Some(480));
+        assert_eq!(state.pending_start_offset(100, 512), Some(380));
+        state.release_pending_start();
+        assert!(!state.pending_start_armed());
         assert_eq!(state.origin_bar, Some(3));
-        assert!(!state.check_pending_start_release());
-        assert_eq!(state.frame(0).unwrap().bar_index, Some(0));
+        assert_eq!(state.frame(480).unwrap().bar_index, Some(0));
     }
 
     #[test]
-    fn plain_start_releases_at_the_next_bar() {
+    fn plain_start_resolves_to_the_next_bar() {
         let mut state = active_state(SessionClockConfig {
             offset_micros: 0,
             timeline: timeline(0, 0.0, 120.0, 4.0),
             pending: None,
         });
         state.request_start_next_bar();
+        assert_eq!(state.pending_start_offset(0, 1 << 20), None);
         state.capture_at(3_000_000, SR); // bar 1.5
-        assert!(!state.check_pending_start_release());
-        // Sample counts track the host clock, as a steady callback does.
-        state.add_samples(47_520);
-        state.capture_at(3_990_000, SR);
-        assert!(!state.check_pending_start_release());
-        state.add_samples(480);
-        state.capture_at(4_000_000, SR); // bar 2.0
-        assert!(state.check_pending_start_release());
-        assert_eq!(state.origin_bar, Some(2));
+        state.resolve_pending_start();
+        assert_eq!(state.pending_start, Some(PendingStart::AtBar(2)));
+        // A later capture does not move the target.
+        state.add_samples(24_000);
+        state.capture_at(3_500_000, SR); // bar 1.75
+        state.resolve_pending_start();
+        assert_eq!(state.pending_start_offset(0, 48_000), Some(24_000));
     }
 
     #[test]
