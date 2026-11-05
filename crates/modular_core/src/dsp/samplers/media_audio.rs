@@ -142,18 +142,12 @@ impl MediaAudio {
         } else {
             1.0
         };
-        // Read around the integer position so the fraction keeps full
-        // precision however far into the track playback is.
-        let left = position.floor() as usize;
-        let start = left.saturating_sub(1);
-        let local = (position - start as f64) as f32;
         for ch in 0..channels {
             let samples = self.params.wav.channel(ch);
-            let window = &samples[start.min(samples.len())..(left + 3).min(samples.len())];
             // A wav's samples are -1 to 1; the engine's audio is -5 to 5V.
             self.outputs
                 .sample
-                .set(ch, hermite_clamped(window, local) * 5.0 * gain);
+                .set(ch, hermite_clamped(samples, position) * 5.0 * gain);
         }
 
         state.position += self.params.speed * state.rate_ratio;
