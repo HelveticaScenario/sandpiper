@@ -61,7 +61,7 @@ export class SessionWorkspace {
         this.mirror = new WorkspaceMirror(this.shared.doc, root, {
             ...host,
             blobs: {
-                fetch: (hash) => this.transfer.fetch(hash),
+                fetch: (hash, size) => this.transfer.fetch(hash, size),
                 onArrived: host.onAssetArrived,
                 store,
             },

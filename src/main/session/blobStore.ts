@@ -26,9 +26,15 @@ export async function hashFile(filePath: string): Promise<string> {
  * Files already on this machine are registered in place, uncopied; one
  * that changes afterwards stops being served under its old hash.
  */
+interface LocalFile {
+    path: string;
+    size: number;
+    mtimeMs: number;
+}
+
 export class BlobStore {
     readonly dir: string;
-    private readonly local = new Map<string, string>();
+    private readonly local = new Map<string, LocalFile>();
 
     constructor(dir: string) {
         this.dir = dir;
@@ -52,9 +58,20 @@ export class BlobStore {
             return stored;
         }
         const local = this.local.get(hash);
-        if (local && fs.existsSync(local)) {
-            return local;
+        if (!local) {
+            return null;
         }
+        // A registered file that changed since it was hashed no longer
+        // holds this blob.
+        try {
+            const stat = fs.statSync(local.path);
+            if (stat.size === local.size && stat.mtimeMs === local.mtimeMs) {
+                return local.path;
+            }
+        } catch {
+            // Gone.
+        }
+        this.local.delete(hash);
         return null;
     }
 
@@ -73,8 +90,16 @@ export class BlobStore {
 
     /** Hash a file on this machine and remember where it is. */
     async register(filePath: string): Promise<string> {
+        const before = await fs.promises.stat(filePath);
         const hash = await hashFile(filePath);
-        this.local.set(hash, filePath);
+        const after = await fs.promises.stat(filePath);
+        if (before.size === after.size && before.mtimeMs === after.mtimeMs) {
+            this.local.set(hash, {
+                mtimeMs: after.mtimeMs,
+                path: filePath,
+                size: after.size,
+            });
+        }
         return hash;
     }
 
@@ -101,8 +126,13 @@ export class BlobStore {
         }
         await fs.promises.mkdir(path.dirname(target), { recursive: true });
         const temp = path.join(path.dirname(target), `.shoreline-${randomUUID()}`);
-        await fs.promises.copyFile(source, temp);
-        await fs.promises.rename(temp, target);
+        try {
+            await fs.promises.copyFile(source, temp);
+            await fs.promises.rename(temp, target);
+        } catch (error) {
+            await fs.promises.rm(temp, { force: true });
+            throw error;
+        }
     }
 
     /** A writer for an incoming blob; it joins the store only if the content matches `hash`. */

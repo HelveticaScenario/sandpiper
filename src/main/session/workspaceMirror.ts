@@ -39,8 +39,8 @@ export interface WorkspaceMirrorOptions {
 
 export interface MirrorBlobs {
     store: BlobStore;
-    /** Get a blob from peers into the store; false if that became impossible. */
-    fetch: (hash: string) => Promise<boolean>;
+    /** Get a blob of `size` bytes from peers into the store; false if that became impossible. */
+    fetch: (hash: string, size: number) => Promise<boolean>;
     /** A peer's asset finished arriving on disk. */
     onArrived: () => void;
 }
@@ -78,6 +78,8 @@ export class WorkspaceMirror {
     private readonly blobsInFlight = new Set<string>();
     /** Asset paths whose first hashing (seeding) has not finished. */
     private readonly seedingBlobs = new Set<string>();
+    /** Blobs that could not be written here, by `${id}:${hash}`; not retried. */
+    private readonly failedBlobs = new Set<string>();
     private readonly observer = () => this.scheduleReconcile();
 
     constructor(doc: Y.Doc, root: string, options: WorkspaceMirrorOptions) {
@@ -289,6 +291,22 @@ export class WorkspaceMirror {
         blobs: Array<{ rel: string; absolute: string; size: number }>,
     ): Promise<void> {
         const store = this.options.blobs?.store;
+        try {
+            await this.seedEach(blobs, store);
+        } finally {
+            for (const blob of blobs) {
+                this.seedingBlobs.delete(blob.rel);
+            }
+        }
+        if (!this.disposed) {
+            this.scheduleReconcile();
+        }
+    }
+
+    private async seedEach(
+        blobs: Array<{ rel: string; absolute: string; size: number }>,
+        store: BlobStore | undefined,
+    ): Promise<void> {
         for (const blob of blobs) {
             try {
                 if (!store || this.disposed) {
@@ -312,9 +330,6 @@ export class WorkspaceMirror {
                 this.seedingBlobs.delete(blob.rel);
             }
         }
-        if (!this.disposed) {
-            this.scheduleReconcile();
-        }
     }
 
     /** Fetch and write a blob entry whose content is not on disk yet. */
@@ -325,13 +340,16 @@ export class WorkspaceMirror {
             return;
         }
         const key = `${entry.id}:${hash}`;
-        if (this.blobsInFlight.has(key)) {
+        if (this.blobsInFlight.has(key) || this.failedBlobs.has(key)) {
             return;
         }
         this.blobsInFlight.add(key);
         void (async () => {
+            let settled = true;
             try {
-                const available = blobs.store.has(hash) || (await blobs.fetch(hash));
+                const available =
+                    blobs.store.has(hash) ||
+                    (await blobs.fetch(hash, entry.size ?? 0));
                 if (!available || this.disposed) {
                     return;
                 }
@@ -354,10 +372,16 @@ export class WorkspaceMirror {
                 this.options.onTreeChanged();
                 blobs.onArrived();
             } catch (error) {
+                // Something on this disk (a folder in the way, permissions)
+                // stops the write; retrying would only repeat the copy.
+                settled = false;
+                this.failedBlobs.add(key);
                 console.warn(`[session] cannot write ${entry.path}`, error);
             } finally {
                 this.blobsInFlight.delete(key);
-                this.scheduleReconcile();
+                if (settled) {
+                    this.scheduleReconcile();
+                }
             }
         })();
     }

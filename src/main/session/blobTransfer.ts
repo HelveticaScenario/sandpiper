@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import { Channel, type ChannelId } from './frames';
+import { MAX_SHARED_BLOB_BYTES } from '../../shared/sessionWorkspace';
 import { type BlobStore, type IncomingBlob, isBlobHash } from './blobStore';
 import type { PeerMesh } from './peerMesh';
 
@@ -39,6 +40,8 @@ export interface TransferProgress {
 
 interface Want {
     hash: string;
+    /** The size the session document gives the blob; chunks must agree. */
+    size: number;
     /** Peers already asked in the current round. */
     asked: Set<string>;
     source: string | null;
@@ -97,12 +100,21 @@ export class BlobTransfer {
         this.wants.clear();
     }
 
-    /** Resolve once the blob is in the store; false if stopped first. */
-    fetch(hash: string): Promise<boolean> {
+    /**
+     * Resolve once the blob is in the store; false if stopped first or the
+     * size is impossible. `size` is the size the session document records.
+     */
+    fetch(hash: string, size: number): Promise<boolean> {
         if (this.store.has(hash)) {
             return Promise.resolve(true);
         }
-        if (this.stopped || !isBlobHash(hash)) {
+        if (
+            this.stopped ||
+            !isBlobHash(hash) ||
+            !Number.isInteger(size) ||
+            size < 0 ||
+            size > MAX_SHARED_BLOB_BYTES
+        ) {
             return Promise.resolve(false);
         }
         return new Promise((resolve) => {
@@ -116,6 +128,7 @@ export class BlobTransfer {
                 hash,
                 incoming: null,
                 retryTimer: null,
+                size,
                 source: null,
                 stallTimer: null,
                 total: 0,
@@ -171,6 +184,10 @@ export class BlobTransfer {
     }
 
     private abandonSource(want: Want): void {
+        if (want.stallTimer) {
+            clearTimeout(want.stallTimer);
+            want.stallTimer = null;
+        }
         want.incoming?.abort();
         want.incoming = null;
         want.total = 0;
@@ -225,7 +242,11 @@ export class BlobTransfer {
         const previous = this.serving.get(peerId) ?? Promise.resolve();
         const next = previous
             .then(() => this.upload(peerId, hash))
-            .catch((error) => console.warn('[session] asset upload failed', error));
+            .catch((error) => {
+                console.warn('[session] asset upload failed', error);
+                // Let the requester move on to another peer at once.
+                this.mesh.sendDirect(peerId, { hash, t: 'blob-none' });
+            });
         this.serving.set(peerId, next);
         void next.finally(() => {
             if (this.serving.get(peerId) === next) {
@@ -254,7 +275,15 @@ export class BlobTransfer {
                 hashBytes.copy(frame, 0);
                 frame.writeBigUInt64BE(BigInt(offset), 32);
                 frame.writeBigUInt64BE(BigInt(size), 40);
-                await handle.read(frame, CHUNK_HEADER_BYTES, length, offset);
+                const { bytesRead } = await handle.read(
+                    frame,
+                    CHUNK_HEADER_BYTES,
+                    length,
+                    offset,
+                );
+                if (bytesRead !== length) {
+                    throw new Error('The asset changed while it was being sent');
+                }
                 if (!(await this.mesh.sendPaced(peerId, Channel.Blob, frame))) {
                     return;
                 }
@@ -277,6 +306,11 @@ export class BlobTransfer {
         const offset = Number(payload.readBigUInt64BE(32));
         const total = Number(payload.readBigUInt64BE(40));
         const data = payload.subarray(CHUNK_HEADER_BYTES);
+        if (total !== want.size || offset + data.byteLength > total) {
+            // Not the blob the session describes.
+            this.abandonSource(want);
+            return;
+        }
         try {
             if (!want.incoming) {
                 if (offset !== 0) {
