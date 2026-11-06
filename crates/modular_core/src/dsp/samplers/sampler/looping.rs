@@ -113,7 +113,7 @@ impl Sampler {
             }
         };
         if xfade > 0.0 {
-            let release = Release::new(*main, false, self.state.fade_out_samples, advance);
+            let release = Release::new(*main, advance);
             push_release(&mut self.state.rels, release);
         }
         self.state.main = next;

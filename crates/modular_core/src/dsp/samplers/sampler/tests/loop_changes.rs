@@ -60,16 +60,26 @@ fn empty_slice_silences_the_loop_until_a_slice_is_selected() {
 }
 
 #[test]
-fn gate_falling_mid_seam_keeps_the_crossfade_smooth() {
+fn gate_falling_mid_seam_fades_out_smoothly() {
     let mut sampler = mid_slice_loop(vec![0.2; 4800], json!({}));
     // The first seam starts at sample 432; drop the gate 10 samples in.
     run(&mut sampler, 442);
     assert!(releasing(&sampler));
     set_gate(&mut sampler, 0.0);
-    let out = run(&mut sampler, 300);
+    // The seam release and the new pass's release ramp never sum above
+    // unity; once the two fall together the slope is at most two ramps'
+    // worth, and the output reaches silence within the fade.
+    let out = run(&mut sampler, 60);
+    let mut prev = 1.0;
     for (i, &v) in out.iter().enumerate() {
-        assert!((v - 1.0).abs() < 1e-3, "sample {i}: expected ~1.0, got {v}");
+        assert!(
+            v <= prev + 1e-6 && prev - v <= 2.0 / 48.0 + 1e-6,
+            "sample {i}: step from {prev} to {v}"
+        );
+        prev = v;
     }
+    assert_eq!(*out.last().unwrap(), 0.0);
+    assert!(!sampler.state.playing);
 }
 
 #[test]

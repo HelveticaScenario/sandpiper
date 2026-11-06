@@ -25624,24 +25624,24 @@
   },
   {
     "name": "$sampler",
-    "documentation": "One-shot sample player. Each gate rising edge starts playback of the whole\nfile, or of one slice when `slice` is set: the slice signal is sampled at\nthe edge — integer part picks the slice point (wrapping), fraction offsets\nthe start into it. Speed control allows pitch-shifting and reverse\nplayback (a slice plays the same region backwards). A short `fade`\n(milliseconds) declicks onsets, slice ends, and retriggers. With `loop`,\nthe window repeats for as long as the gate stays high, picking the slice\nagain for each repeat.\n\n```js\n$sampler($wavs().kick, $pulse('4hz'))\n$sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })\n$sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })\n$sampler($wavs().pad, $pulse('0.5hz'), { loop: true, fade: 10 })\n```",
+    "documentation": "Gated sample player. Each gate rising edge starts playback of the whole\nfile, or of one slice when `slice` is set; it plays until it ends or the\ngate falls. The slice signal is sampled at the edge: integer part picks\nthe slice point (wrapping), fraction offsets the start into it. Speed\ncontrol allows pitch-shifting and reverse playback (a slice plays the\nsame region backwards). A short `fade` (milliseconds) declicks onsets,\nslice ends, gate releases, and retriggers. With `loop`, the window\nrepeats for as long as the gate stays high, picking the slice again for\neach repeat.\n\n```js\n$sampler($wavs().kick, $pulse('4hz'))\n$sampler($wavs().pad, $pulse('1hz'), { speed: 0.5 })\n$sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })\n$sampler($wavs().pad, $pulse('0.5hz'), { loop: true, fade: 10 })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "SamplerParams",
       "type": "object",
       "properties": {
         "fade": {
-          "description": "Declick fade in milliseconds: fade-in at onset, fade-out at the window\nexit edge, and retrigger crossfade. 0 disables.",
+          "description": "Declick fade in milliseconds: fade-in at onset, fade-out at the window\nexit edge and when the gate falls, and retrigger crossfade. 0 disables.",
           "type": "number",
           "format": "double",
           "default": 1.0
         },
         "gate": {
-          "description": "Gate input — rising edge starts playback of the selected window;\nwith `loop`, holding it high keeps it repeating.",
+          "description": "Gate input — rising edge starts playback of the selected window,\nwhich sounds while the gate stays high; with `loop`, holding it high\nkeeps it repeating.",
           "$ref": "#/$defs/MonoSignal"
         },
         "loop": {
-          "description": "Repeat while the gate is high (default false): each time a pass\nreaches its window's end, the slice is picked again and the next pass\nstarts on time, so passes never drift. With a fade, the crossfade\nuses the audio just before the next window (after it in reverse),\ntopped up by letting the old pass run on past its end. When the gate\nfalls or the next slice is empty, the current pass plays out.",
+          "description": "Repeat while the gate is high (default false): each time a pass\nreaches its window's end, the slice is picked again and the next pass\nstarts on time, so passes never drift. With a fade, the crossfade\nuses the audio just before the next window (after it in reverse),\ntopped up by letting the old pass run on past its end. When the gate\nfalls, playback fades out over `fade`; when `loop` turns off or the\nnext slice is empty, the current pass plays out.",
           "type": "boolean",
           "default": false
         },
@@ -25792,7 +25792,7 @@
     "signalParams": [
       {
         "name": "gate",
-        "description": "Gate input — rising edge starts playback of the selected window;\nwith `loop`, holding it high keeps it repeating.",
+        "description": "Gate input — rising edge starts playback of the selected window,\nwhich sounds while the gate stays high; with `loop`, holding it high\nkeeps it repeating.",
         "signalType": "gate",
         "defaultValue": 0.0,
         "minValue": 0.0,
