@@ -8,10 +8,32 @@ const MAX_NAME_LENGTH = 40;
 
 export interface SessionHost {
     compat: string;
+    /** DHT bootstrap nodes; the public network when omitted. */
+    bootstrap?: Array<{ host: string; port: number }>;
     sendState: (state: SessionState) => void;
     readSavedName: () => string | undefined;
     saveName: (name: string) => void;
     writeClipboard: (text: string) => void;
+}
+
+/**
+ * Parse `host:port,host:port` into DHT bootstrap nodes, or undefined for an
+ * empty or malformed list.
+ */
+export function parseBootstrap(
+    value: string | undefined,
+): Array<{ host: string; port: number }> | undefined {
+    if (!value) {
+        return undefined;
+    }
+    const nodes = value.split(',').map((item) => {
+        const colon = item.lastIndexOf(':');
+        const port = Number(item.slice(colon + 1));
+        return { host: item.slice(0, colon).trim(), port };
+    });
+    return nodes.every((n) => n.host && Number.isInteger(n.port) && n.port > 0)
+        ? nodes
+        : undefined;
 }
 
 /** The display name a session starts with: the saved one, else the OS user. */
@@ -34,7 +56,10 @@ export class SessionController {
 
     constructor(host: SessionHost) {
         this.host = host;
-        this.manager = new SessionManager({ compat: host.compat });
+        this.manager = new SessionManager({
+            bootstrap: host.bootstrap,
+            compat: host.compat,
+        });
         this.manager.on('state', (state) => host.sendState(state));
     }
 

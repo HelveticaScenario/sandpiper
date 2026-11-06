@@ -35,7 +35,7 @@ export interface ActiveSession {
 
 export interface SessionManagerEvents {
     state: [state: SessionState];
-    /** A session began; the mesh is announced but may have no peers yet. */
+    /** A session began; its mesh is about to announce itself. */
     started: [session: ActiveSession];
     /** The session ended; its mesh is stopped. */
     ended: [session: ActiveSession];
@@ -145,14 +145,18 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         mesh.on('peer-close', () => this.emitStateFor(active));
         mesh.on('rejected', (rejection) => this.noteRejection(active, rejection));
         mesh.on('network', () => this.emitStateFor(active));
+        // Layers attach before the mesh announces itself, so nothing a peer
+        // sends on connecting is missed.
+        this.active = active;
         try {
+            this.emit('started', active);
             await mesh.start();
         } catch (error) {
+            this.active = null;
             await mesh.stop();
+            this.emit('ended', active);
             throw error;
         }
-        this.active = active;
-        this.emit('started', active);
         this.emitState();
         return this.getState();
     }

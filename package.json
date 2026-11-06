@@ -113,6 +113,7 @@
         "hls.js": "^1.7.3",
         "hyperswarm": "^4.17.2",
         "jsonc-parser": "^3.3.1",
+        "lib0": "^0.2.119",
         "monaco-editor": "^0.55.1",
         "prettier": "^3.8.4",
         "react": "^19.2.6",
@@ -122,6 +123,8 @@
         "ts-morph": "^27.0.2",
         "typescript": "~5.9.3",
         "uuid": "^13.0.0",
+        "y-protocols": "^1.0.7",
+        "yjs": "^13.6.33",
         "zod": "^4.3.5"
     },
     "workspaces": [

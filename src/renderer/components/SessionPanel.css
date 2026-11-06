@@ -177,3 +177,27 @@
     align-items: center;
     gap: 4px;
 }
+
+/* Remote cursors in the editor. Per-peer colours and names come from the
+   style element useSharedEditing maintains. */
+.yRemoteSelectionHead {
+    position: absolute;
+    height: 100%;
+    border-left: 2px solid #888;
+    box-sizing: border-box;
+    pointer-events: none;
+}
+
+.yRemoteSelectionHead::after {
+    position: absolute;
+    left: -2px;
+    top: -1.25em;
+    padding: 0 4px;
+    border-radius: 3px 3px 3px 0;
+    color: #fff;
+    font-size: 10px;
+    line-height: 1.25em;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 10;
+}

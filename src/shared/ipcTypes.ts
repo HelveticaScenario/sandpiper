@@ -389,6 +389,8 @@ export const IPC_CHANNELS = {
     FS_SHOW_INPUT_DIALOG: 'modular:fs:show-input-dialog',
     FS_WATCH_OPEN_FILES: 'modular:fs:watch-open-files',
     FS_ON_FILE_CHANGED: 'modular:fs:on-file-changed',
+    FS_ON_TREE_CHANGED: 'modular:fs:on-tree-changed',
+    FS_ON_WORKSPACE_CHANGED: 'modular:fs:on-workspace-changed',
 
     // UI operations
     SHOW_CONTEXT_MENU: 'ui:show-context-menu',
@@ -439,6 +441,11 @@ export const IPC_CHANNELS = {
     SESSION_LEAVE: 'modular:session:leave',
     SESSION_COPY_INVITE: 'modular:session:copy-invite',
     SESSION_ON_STATE: 'modular:session:on-state',
+    SESSION_DOC_CONNECT: 'modular:session:doc-connect',
+    SESSION_DOC_UPDATE: 'modular:session:doc-update',
+    SESSION_AWARENESS_UPDATE: 'modular:session:awareness-update',
+    SESSION_ON_DOC_UPDATE: 'modular:session:on-doc-update',
+    SESSION_ON_AWARENESS_UPDATE: 'modular:session:on-awareness-update',
 
     // Update operations
     UPDATE_CHECK: 'modular:update:check',
@@ -662,9 +669,27 @@ export interface IPCHandlers {
     /** Copy the invite link; false when there is no session. */
     [IPC_CHANNELS.SESSION_COPY_INVITE]: () => boolean;
     [IPC_CHANNELS.SESSION_ON_STATE]: (state: SessionState) => void;
+    /**
+     * Attach the renderer's replica of the session document; returns the
+     * full document and presence state, or null outside a session.
+     */
+    [IPC_CHANNELS.SESSION_DOC_CONNECT]: () => {
+        doc: Uint8Array;
+        awareness: Uint8Array;
+    } | null;
+    [IPC_CHANNELS.SESSION_DOC_UPDATE]: (update: Uint8Array) => void;
+    [IPC_CHANNELS.SESSION_AWARENESS_UPDATE]: (update: Uint8Array) => void;
+    [IPC_CHANNELS.SESSION_ON_DOC_UPDATE]: (update: Uint8Array) => void;
+    [IPC_CHANNELS.SESSION_ON_AWARENESS_UPDATE]: (update: Uint8Array) => void;
 
     /** A watched file changed on disk; `content` is as FS_READ_FILE returns. */
     [IPC_CHANNELS.FS_ON_FILE_CHANGED]: (change: FileChange) => void;
+    /** Files appeared, moved or disappeared in the workspace. */
+    [IPC_CHANNELS.FS_ON_TREE_CHANGED]: () => void;
+    /** The main process opened a different workspace. */
+    [IPC_CHANNELS.FS_ON_WORKSPACE_CHANGED]: (
+        workspace: WorkspaceFolder,
+    ) => void;
 
     // Update operations (invokable)
     [IPC_CHANNELS.UPDATE_CHECK]: () => void;
