@@ -22,7 +22,7 @@ use crate::{
     poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
 };
 
-use super::glide::{GlideRamp, Lookahead};
+use super::glide::{GlideRamp, GlideTracker, GlideVoice, Playhead};
 use super::groove::{GrooveHold, before_first_step, fill_groove_inputs};
 use super::seq_value::{HAP_MATCH_EPS, SeqCycleHap, SeqCycleStorage, SeqPatternParam, SeqValue};
 
@@ -381,6 +381,7 @@ struct SeqOutputs {
     channels_derive = seq_derive_channel_count,
     args(pattern),
     stateful,
+    patch_update,
 )]
 pub struct Seq {
     outputs: SeqOutputs,
@@ -424,6 +425,29 @@ impl SeqChannel {
     }
 }
 
+impl GlideVoice for SeqChannel {
+    fn ramp(&self) -> Option<&GlideRamp> {
+        self.glide.as_ref()
+    }
+
+    fn free_by(&self, onset: f64) -> bool {
+        !self.voice.active
+            || self
+                .voice
+                .cached_hap
+                .is_some_and(|held| held.raw_end <= onset)
+    }
+
+    fn held_cv(&self) -> f32 {
+        SeqChannel::held_cv(self)
+    }
+
+    fn claim(&mut self, ramp: GlideRamp) {
+        self.glide_hold = None;
+        self.glide = Some(ramp);
+    }
+}
+
 /// Module-level state for the Seq module.
 struct SeqState {
     /// Previous frame's folded playhead position, for window-membership edge
@@ -449,21 +473,8 @@ struct SeqState {
     /// Pre-allocated DP scratch for nearest-value voice assignment. Boxed and
     /// built here (main thread) so the audio thread never allocates.
     assign: Box<AssignScratch>,
-    /// When the glide lookahead must next rescan. Between scans no window
-    /// opens and no voice changes, so nothing can be claimed.
-    glide_scan: GlideScan,
-}
-
-/// The bake and playhead span a glide scan answered for.
-#[derive(Clone, Copy, Default, PartialEq)]
-struct GlideScan {
-    /// Identity of the baked hap storage and the ribbon it was baked for.
-    bake: usize,
-    ribbon: (f64, f64),
-    /// Playhead at the scan.
-    from: f64,
-    /// Playhead where the next glide window opens.
-    until: f64,
+    /// Glide windows the playhead is inside that no voice has claimed yet.
+    glides: GlideTracker,
 }
 
 impl Default for SeqState {
@@ -476,7 +487,7 @@ impl Default for SeqState {
             voices_to_release: ArrayVec::new(),
             events_to_process: ArrayVec::new(),
             assign: Box::new(AssignScratch::default()),
-            glide_scan: GlideScan::default(),
+            glides: GlideTracker::default(),
         }
     }
 }
@@ -593,10 +604,19 @@ impl Seq {
         }
 
         let mut voices_changed = !self.state.voices_to_release.is_empty();
+        // Glide windows are tracked by the playhead stepping forward within a
+        // lap; anything else, or a new bake, rescans them.
+        let rescan_glides = self.state.glides.rescan
+            || !started
+            || raw_clamped < prev_raw
+            || raw_clamped - prev_raw >= length
+            || (!lap_wrapped && logical < prev_logical);
         let step = (raw_clamped - prev_raw).abs();
         for channel in &mut self.channel_state[..num_channels] {
             if let Some(ramp) = channel.glide
-                && !ramp.is_live(raw_clamped, step, base, self.params.pattern.cached_haps())
+                && !(ramp.in_range(raw_clamped, step)
+                    && (!rescan_glides
+                        || ramp.target_exists(base, self.params.pattern.cached_haps())))
             {
                 channel.glide_hold = Some(ramp.value_at(raw_clamped));
                 channel.glide = None;
@@ -825,7 +845,11 @@ impl Seq {
                 };
                 let event = self.state.events_to_process[ei];
                 self.channel_state[voice_idx].velocity = velocity;
-                self.channel_state[voice_idx].glide = None;
+                if let Some(ramp) = self.channel_state[voice_idx].glide.take()
+                    && !ramp.targets(current_cycle, event.hap_index)
+                {
+                    self.state.glides.push(ramp.target);
+                }
                 self.channel_state[voice_idx].glide_hold = None;
                 let voice = &mut self.channel_state[voice_idx].voice;
                 voice.cached_hap = Some(CachedHap {
@@ -848,111 +872,22 @@ impl Seq {
             }
         }
 
-        if self.params.pattern.max_glide > 0.0 {
-            self.claim_glides(pos, raw_clamped, voices_changed);
-        }
+        self.state.glides.advance(
+            &self.params.pattern.glide,
+            &Playhead {
+                raw: raw_clamped,
+                pos,
+                prev_pos: prev_logical,
+                lap_wrapped,
+                offset,
+                length,
+            },
+            rescan_glides,
+            &mut self.channel_state[..num_channels],
+            voices_changed,
+        );
 
         self.write_voice_outputs(raw_clamped);
-    }
-
-    /// Give each note whose glide window has opened to the nearest-pitched
-    /// voice free at its onset, unless the onsets before it need every such
-    /// voice. The scan reruns only when a window opens, a voice changes, the
-    /// bake changes, or the playhead moves back.
-    fn claim_glides(&mut self, pos: f64, raw: f64, voices_changed: bool) {
-        let num_channels = self.channel_count();
-        let (offset, length) = self.params.ribbon;
-        let cached_haps = self.params.pattern.cached_haps();
-        let scan = &mut self.state.glide_scan;
-        let bake = cached_haps.as_ptr() as usize;
-        if !voices_changed
-            && scan.bake == bake
-            && scan.ribbon == (offset, length)
-            && raw >= scan.from
-            && raw < scan.until
-        {
-            return;
-        }
-        let max_glide = self.params.pattern.max_glide;
-        let lookahead = Lookahead {
-            cached_haps,
-            base: offset.floor() as i64,
-            offset,
-            length,
-            pos,
-        };
-        // A window opening past `horizon` lies beyond `max_glide` ahead.
-        let horizon = 2.0 * max_glide;
-        let mut until = raw + max_glide;
-        let channels = &mut self.channel_state[..num_channels];
-        let is_claimed = |channels: &[SeqChannel], cycle: i64, hap_index: u32| {
-            channels.iter().any(|channel| {
-                channel
-                    .glide
-                    .is_some_and(|ramp| ramp.targets(cycle, hap_index))
-            })
-        };
-        lookahead.for_each_onset(horizon, |open| {
-            let glide = open.value.glide();
-            if glide <= 0.0 {
-                return;
-            }
-            if open.distance > glide {
-                until = until.min(raw + open.distance - glide);
-                return;
-            }
-            if is_claimed(channels, open.cycle, open.hap_index) {
-                return;
-            }
-            let onset = raw + open.distance;
-            let free_at_onset = |channel: &SeqChannel| {
-                channel.glide.is_none()
-                    && (!channel.voice.active
-                        || channel
-                            .voice
-                            .cached_hap
-                            .is_some_and(|held| held.raw_end <= onset + HAP_MATCH_EPS))
-            };
-            let free = channels.iter().filter(|c| free_at_onset(c)).count();
-            let mut earlier = 0;
-            lookahead.for_each_onset(open.distance, |other| {
-                if other.distance < open.distance - HAP_MATCH_EPS
-                    && !is_claimed(channels, other.cycle, other.hap_index)
-                {
-                    earlier += 1;
-                }
-            });
-            if free <= earlier {
-                return;
-            }
-            let target = open.value.to_voltage().unwrap_or(0.0) as f32;
-            let nearest = (0..channels.len())
-                .filter(|&ch| free_at_onset(&channels[ch]))
-                .min_by(|&a, &b| {
-                    (channels[a].held_cv() - target)
-                        .abs()
-                        .total_cmp(&(channels[b].held_cv() - target).abs())
-                });
-            if let Some(ch) = nearest {
-                let from = channels[ch].held_cv();
-                channels[ch].glide_hold = None;
-                channels[ch].glide = Some(GlideRamp {
-                    cycle: open.cycle,
-                    hap_index: open.hap_index,
-                    whole_begin: open.whole_begin,
-                    value: open.value,
-                    from,
-                    start: raw,
-                    end: onset,
-                });
-            }
-        });
-        *scan = GlideScan {
-            bake,
-            ribbon: (offset, length),
-            from: raw,
-            until,
-        };
     }
 
     fn write_voice_outputs(&mut self, raw: f64) {
@@ -1187,6 +1122,13 @@ impl crate::types::StatefulModule for Seq {
                 }
             }
         }
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Seq {
+    /// A patch update may bring a new bake, so the glide windows rescan.
+    fn on_patch_update(&mut self) {
+        self.state.glides.rescan = true;
     }
 }
 

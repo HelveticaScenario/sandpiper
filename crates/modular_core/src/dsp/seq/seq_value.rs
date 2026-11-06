@@ -28,6 +28,8 @@ use super::cache::{
     CycleStorage, MIN_HAPS_CAP_HINT, SPANS_RESERVE_PER_HAP,
     populate_cycle_storage as cache_populate,
 };
+use super::glide::GlideBake;
+use super::glide_curve::{GlideCurve, GlideEase, GlideMode};
 
 /// Scalar cached hap data. No `Vec` or `Arc` — voices can hold these
 /// by value without keeping cycle storage alive.
@@ -101,6 +103,8 @@ pub enum SeqValue {
         /// Length in cycles of the CV ramp into this note, ending on its
         /// onset. Zero jumps.
         glide: f64,
+        /// Shape of that ramp.
+        ease: GlideEase,
     },
 
     /// Rest - no value output, gate goes low
@@ -110,7 +114,11 @@ pub enum SeqValue {
 impl SeqValue {
     /// A pitch that jumps to its value at onset.
     pub fn voltage(volts: f64) -> Self {
-        SeqValue::Voltage { volts, glide: 0.0 }
+        SeqValue::Voltage {
+            volts,
+            glide: 0.0,
+            ease: GlideEase::default(),
+        }
     }
 
     /// Get the voltage (V/Oct) value.
@@ -132,6 +140,14 @@ impl SeqValue {
         match self {
             SeqValue::Voltage { glide, .. } => *glide,
             SeqValue::Rest => 0.0,
+        }
+    }
+
+    /// Shape of the ramp into this note; linear for a rest.
+    pub fn ease(&self) -> GlideEase {
+        match self {
+            SeqValue::Voltage { ease, .. } => *ease,
+            SeqValue::Rest => GlideEase::default(),
         }
     }
 
@@ -625,10 +641,11 @@ pub struct BeatPatternPayload {
     pub div: FactorPayload,
 }
 
-/// JSON payload for `$p(...).glide(length)`: give each note of `pattern` a CV
-/// ramp `length` cycles long that ends on its onset. `length` follows
-/// [`FactorPayload`]'s const-vs-pattern duality and is sampled at each onset;
-/// negative lengths jump.
+/// JSON payload for `$p(...).glide(length, curve, mode)`: give each note of
+/// `pattern` a CV ramp `length` cycles long that ends on its onset, shaped by
+/// `curve` eased at `mode`'s end. `length` follows [`FactorPayload`]'s
+/// const-vs-pattern duality and is sampled at each onset; negative lengths
+/// jump.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GlidePatternPayload {
     /// Discriminator — TS-side `.glide` sets this so the `SeqPatternSource`
@@ -637,6 +654,10 @@ pub struct GlidePatternPayload {
     pub kind: GlideKindTag,
     pub pattern: Box<SeqPatternSource>,
     pub length: FactorPayload,
+    #[serde(default)]
+    pub curve: GlideCurve,
+    #[serde(default)]
+    pub mode: GlideMode,
 }
 
 /// Wire-level dispatch shape: a `.fast`/`.slow`/`.struct`/`.beat` wrapper, an
@@ -704,9 +725,9 @@ pub struct SeqPatternParam {
     /// return through the garbage queue and drop on the main thread.
     pub(crate) cached_haps: Arc<[SeqCycleStorage]>,
 
-    /// Longest glide among the baked notes inside the ribbon window, in
-    /// cycles. Zero when nothing glides, which lets `Seq` skip its lookahead.
-    pub(crate) max_glide: f64,
+    /// Where the baked notes' glide windows open. Shared and dropped like
+    /// `cached_haps`.
+    pub(crate) glide: Arc<GlideBake>,
 }
 
 impl JsonSchema for SeqPatternParam {
@@ -745,7 +766,7 @@ impl SeqPatternParam {
             is_multi_source,
             pattern: Some(pattern),
             cached_haps: Arc::default(),
-            max_glide: 0.0,
+            glide: Arc::default(),
         }
     }
 
@@ -931,10 +952,15 @@ impl SeqPatternParam {
         if let Some(meta) = length_meta {
             per_source.push(meta);
         }
-        let glided = inner.app_onset(&length, |value, length| match *value {
+        let ease = GlideEase {
+            curve: payload.curve,
+            mode: payload.mode,
+        };
+        let glided = inner.app_onset(&length, move |value, length| match *value {
             SeqValue::Voltage { volts, .. } => SeqValue::Voltage {
                 volts,
                 glide: length.map_or(0.0, |length| length.to_f64().max(0.0)),
+                ease,
             },
             SeqValue::Rest => SeqValue::Rest,
         });
@@ -1145,13 +1171,7 @@ impl SeqPatternParam {
     pub(crate) fn bake(&mut self, offset: f64, length: f64) {
         if let Some(pattern) = self.pattern.as_ref() {
             let cached_haps = bake_cycles(pattern, offset, length);
-            let end = offset + length;
-            self.max_glide = cached_haps
-                .iter()
-                .flat_map(|storage| &storage.haps)
-                .filter(|hap| hap.has_onset && hap.whole_begin >= offset && hap.whole_begin < end)
-                .map(|hap| hap.value.glide())
-                .fold(0.0, f64::max);
+            self.glide = Arc::new(GlideBake::new(&cached_haps, offset, length));
             self.cached_haps = cached_haps.into();
         }
     }

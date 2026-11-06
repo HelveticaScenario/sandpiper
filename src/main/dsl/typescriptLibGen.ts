@@ -26,6 +26,7 @@ import {
     renderOutOptionsJsDocList,
     renderOutOptionsMembers,
 } from '../../shared/dsl/outOptions';
+import { GLIDE_CURVES, GLIDE_MODES, literalUnion } from './glideCurves';
 export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
@@ -414,17 +415,22 @@ type ParsedPattern = {
   beat(t: number | string, div: number | string): BeatPattern;
   /**
    * Give each note a glide (portamento) of \`g\` cycles. \`$cycle\` ramps
-   * its CV linearly from the previous pitch, starting \`g\` cycles before
-   * the note's onset and arriving on it. \`g\` is sampled at each onset;
+   * its CV from the previous pitch, starting \`g\` cycles before the
+   * note's onset and arriving on it. \`g\` is sampled at each onset;
    * \`0\` jumps. It is a constant or a mini-notation number pattern. With
    * several voices, each gliding note takes the nearest-pitched voice that is
    * free at its onset.
    *
+   * \`curve\` shapes the ramp (default \`'linear'\`) and \`mode\` picks
+   * which end it eases: \`'in'\` (default), \`'out'\` or \`'inOut'\`.
+   * Every curve stays between the two pitches.
+   *
    * \`\`\`js
    * $sine($p("c4 e4 g4").glide("0 0.1 0.25")).out()
+   * $sine($p("c3 g3").glide(0.25, 'expo', 'out')).out()
    * \`\`\`
    */
-  glide(g: number | string): GlidePattern;
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /**
    * Shorthand for \`$cycle(pattern, ...rest)\`: plays this pattern with a
    * \`$cycle\` sequencer. Accepts the same arguments as \`$cycle\` after its
@@ -666,7 +672,7 @@ type SpPattern = {
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
   /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
-  glide(g: number | string): GlidePattern;
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -687,7 +693,7 @@ type ArrangePattern = {
   /** Place this arrangement at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
   /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
-  glide(g: number | string): GlidePattern;
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -708,7 +714,7 @@ type FastPattern = {
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
   /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
-  glide(g: number | string): GlidePattern;
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -727,7 +733,7 @@ type SlowPattern = {
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
   /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
-  glide(g: number | string): GlidePattern;
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -753,7 +759,7 @@ type StructPattern = {
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
   /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
-  glide(g: number | string): GlidePattern;
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -779,13 +785,19 @@ type BeatPattern = {
   /** Place this pattern at other beats. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
   /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
-  glide(g: number | string): GlidePattern;
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
+/** Shape of a glide ramp. See \`$p(...).glide\`. */
+type GlideCurve = ${literalUnion(GLIDE_CURVES)};
+
+/** Which end of a glide ramp its curve eases. See \`$p(...).glide\`. */
+type GlideMode = ${literalUnion(GLIDE_MODES)};
+
 /**
- * A gliding pattern returned by \`pattern.glide(g)\`: \`$cycle\` ramps into
+ * A gliding pattern returned by \`pattern.glide(g, curve, mode)\`: \`$cycle\` ramps into
  * each note over \`g\` cycles. Pass directly to \`$cycle\`'s \`pattern\`
  * param, nest it as an \`$p.arrange(...)\` section, or chain further pattern
  * methods. Opaque to user code — construct with \`.glide(...)\`; never build
@@ -801,7 +813,7 @@ type GlidePattern = {
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
   /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
-  glide(g: number | string): GlidePattern;
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };

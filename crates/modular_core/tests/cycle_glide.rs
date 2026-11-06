@@ -28,7 +28,19 @@ fn cycle_patch(pattern: Value, channels: Option<u64>) -> Patch {
 }
 
 fn cycle_patch_at(pattern: Value, channels: Option<u64>, tempo: f64) -> Patch {
+    cycle_patch_with(pattern, channels, tempo, None)
+}
+
+fn cycle_patch_with(
+    pattern: Value,
+    channels: Option<u64>,
+    tempo: f64,
+    ribbon: Option<(f64, f64)>,
+) -> Patch {
     let mut params = serde_json::Map::new();
+    if let Some((offset, length)) = ribbon {
+        params.insert("ribbon".to_string(), json!([offset, length]));
+    }
     params.insert("pattern".to_string(), pattern);
     if let Some(ch) = channels {
         params.insert("channels".to_string(), json!(ch));
@@ -287,4 +299,104 @@ fn a_stacked_glide_pattern_does_not_duplicate_notes() {
         }
     }
     assert_eq!(rises, 2, "one onset per note");
+}
+
+/// Run A (gliding) then B (no glide) then C (gliding), swapping mid-cycle, and
+/// return C's CV halfway through its glide window into `3` at 0.5.
+fn cv_mid_window_after_two_swaps(keep_a_alive: bool) -> f32 {
+    // `0` at 0 glides 0.5 into its next lap, so A's scan at the onset finds no
+    // window opening before 0.5.
+    let a = cycle_patch(glide(mini("0 ~ ~ ~"), json!(0.5)), Some(1));
+    trace(&a, 0, SAMPLES_PER_CYCLE / 10);
+    let b = cycle_patch(mini("0 ~ ~ ~"), Some(1));
+    transfer_into(&b, &a);
+    let kept = keep_a_alive.then_some(a);
+    trace(&b, 0, SAMPLES_PER_CYCLE * 2 / 10);
+    // `3` at 0.5 glides in from 0.25; the playhead is at 0.3.
+    let c = cycle_patch(glide(mini("0 ~ 3 ~"), json!(0.25)), Some(1));
+    transfer_into(&c, &b);
+    let t = trace(&c, 0, SAMPLES_PER_CYCLE / 10);
+    drop(kept);
+    t.last().unwrap().0
+}
+
+#[test]
+fn a_glide_window_open_at_a_swap_is_claimed_after_it() {
+    // Freed bakes let later bakes reuse their memory, so repeat the swaps.
+    for attempt in 0..20 {
+        for keep_a_alive in [true, false] {
+            let cv = cv_mid_window_after_two_swaps(keep_a_alive);
+            assert!(
+                cv > 0.5 && cv < 2.5,
+                "attempt {attempt} (A alive: {keep_a_alive}): cv {cv} not ramping"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_note_glides_with_more_open_windows_than_channels() {
+    // Each of 80 notes glides over the whole loop, so more windows are open at
+    // once than a `$cycle` has channels, while one voice plays them in turn.
+    let notes: Vec<String> = (0..80).map(|n| n.to_string()).collect();
+    // A fiftieth of the usual tempo, so each note outlasts its trigger pulse.
+    let patch = cycle_patch_at(glide(mini(&notes.join(" ")), json!(1.0)), Some(1), 960.0);
+    let t = trace(&patch, 0, 100 * SAMPLES_PER_CYCLE + 1);
+    let on = onsets(&t);
+    assert_eq!(on.len(), 161, "every note fires");
+    for pair in on.windows(2).skip(1) {
+        let (from, to) = (t[pair[0]].0, t[pair[1]].0);
+        let mid = t[(pair[0] + pair[1]) / 2].0;
+        assert!(
+            (mid - (from + to) / 2.0).abs() < 0.3,
+            "ramp from {from} to {to} sits at {mid} midway"
+        );
+    }
+}
+
+#[test]
+fn a_rescan_finds_a_window_that_opened_behind_the_seam() {
+    // On a one-cycle loop, `1` at 0.5 glides 0.75, so its window opens at
+    // 0.75 of the previous lap. The start and the swap at 0.1 both rescan
+    // inside it.
+    let pattern = || glide(mini("0 1"), json!(0.75));
+    let a = cycle_patch_with(pattern(), Some(1), 48000.0, Some((0.0, 1.0)));
+    trace(&a, 0, SAMPLES_PER_CYCLE / 10);
+    let b = cycle_patch_with(pattern(), Some(1), 48000.0, Some((0.0, 1.0)));
+    transfer_into(&b, &a);
+    let t = trace(&b, 0, SAMPLES_PER_CYCLE * 3 / 10);
+    let at_swap = t[0].0;
+    assert_near(
+        t.last().unwrap().0,
+        at_swap + (1.0 - at_swap) * 0.75,
+        "ramping into `1`",
+    );
+}
+
+#[test]
+fn curve_and_mode_shape_the_ramp() {
+    let halfway = |curve: &str, mode: &str| {
+        let pattern = json!({
+            "__kind": "GlidePattern",
+            "pattern": mini("0 1"),
+            "length": 0.25,
+            "curve": curve,
+            "mode": mode,
+        });
+        let patch = cycle_patch(pattern, Some(1));
+        let t = trace(&patch, 0, SAMPLES_PER_CYCLE);
+        let onset = onsets(&t)[1];
+        (t[onset - SAMPLES_PER_CYCLE / 8].0, t[onset].0)
+    };
+    for (curve, mode, expected) in [
+        ("linear", "out", 0.5),
+        ("quad", "in", 0.25),
+        ("quad", "out", 0.75),
+        ("quad", "inOut", 0.5),
+        ("cubic", "in", 0.125),
+    ] {
+        let (mid, landed) = halfway(curve, mode);
+        assert_near(mid, expected, &format!("{curve} {mode} halfway"));
+        assert_near(landed, 1.0, &format!("{curve} {mode} on the onset"));
+    }
 }

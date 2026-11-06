@@ -22,6 +22,12 @@ import { collectLeafSpans } from './collectLeafSpans';
 import { MiniParseError, parseMini } from './parser';
 import { captureSourceLocation } from '../captureSourceLocation';
 import { lookupArgumentSpan } from '../factories';
+import {
+    GLIDE_CURVES,
+    GLIDE_MODES,
+    type GlideCurve,
+    type GlideMode,
+} from '../glideCurves';
 
 export type { MiniAST, ParsedPattern } from './ast';
 export { MiniParseError } from './parser';
@@ -446,9 +452,11 @@ const GLIDE_KIND = 'GlidePattern' as const;
  * mini-notation number pattern.
  *
  * `.glide`: gives each note a glide length in cycles. `$cycle` ramps its CV
- * linearly from the previous pitch, starting that many cycles before the
- * note's onset and arriving on it. Sampled at each onset; `0` jumps. Accepts
- * a constant number or a mini-notation number pattern.
+ * from the previous pitch, starting that many cycles before the note's onset
+ * and arriving on it. Sampled at each onset; `0` jumps. Accepts a constant
+ * number or a mini-notation number pattern. An optional curve (default
+ * `'linear'`) and mode (`'in'`, `'out'` or `'inOut'`, default `'in'`) shape
+ * the ramp.
  *
  * `.cycle(...rest)`: shorthand for `$cycle(pattern, ...rest)`, forwarding
  * every argument after the pattern to the `$cycle` factory.
@@ -462,7 +470,11 @@ export interface TimeModifiable {
         t: number | string,
         div: number | string,
     ): BeatPattern & TimeModifiable;
-    glide(g: number | string): GlidePattern & TimeModifiable;
+    glide(
+        g: number | string,
+        curve?: GlideCurve,
+        mode?: GlideMode,
+    ): GlidePattern & TimeModifiable;
 }
 
 /**
@@ -544,7 +556,7 @@ export interface BeatPattern {
 }
 
 /**
- * Wire shape for `pattern.glide(g)`. Recognised by the Rust `SeqPatternSource`
+ * Wire shape for `pattern.glide(g, curve, mode)`. Recognised by the Rust `SeqPatternSource`
  * untagged enum via `__kind === 'GlidePattern'`. `length` follows
  * {@link FastPattern.factor}'s const-vs-pattern duality and, as a string,
  * appends its span after the wrapped pattern's.
@@ -553,6 +565,8 @@ export interface GlidePattern {
     __kind: typeof GLIDE_KIND;
     pattern: SectionPattern;
     length: number | ParsedPatternPayload;
+    curve: GlideCurve;
+    mode: GlideMode;
     argument_spans: Array<SourceSpan>;
 }
 
@@ -663,15 +677,33 @@ function makeSlow(
     });
 }
 
+/** Throw unless `value` is one of `allowed`. */
+function expectOneOf<T extends string>(
+    value: unknown,
+    allowed: ReadonlyArray<T>,
+    what: string,
+): T {
+    if (!allowed.includes(value as T)) {
+        throw new MiniParseError(
+            `glide() ${what} must be one of ${allowed.map((a) => `'${a}'`).join(', ')}, got ${JSON.stringify(value)}`,
+        );
+    }
+    return value as T;
+}
+
 /** Build a `GlidePattern` wrapper around `inner`. */
 function makeGlide(
     inner: SectionPattern,
     g: number | string,
+    curve: GlideCurve = 'linear',
+    mode: GlideMode = 'in',
 ): GlidePattern & TimeModifiable {
     return attachTimeModifiers({
         __kind: GLIDE_KIND,
         pattern: inner,
         length: factorPayload(g, 'glide'),
+        curve: expectOneOf(curve, GLIDE_CURVES, 'curve'),
+        mode: expectOneOf(mode, GLIDE_MODES, 'mode'),
         argument_spans: factorArgumentSpans(inner, g, 'glide'),
     });
 }
@@ -794,7 +826,8 @@ function attachTimeModifiers<T extends SectionPattern>(
         struct: (boolPattern: string) => makeStruct(pattern, boolPattern),
         beat: (t: number | string, div: number | string) =>
             makeBeat(pattern, t, div),
-        glide: (g: number | string) => makeGlide(pattern, g),
+        glide: (g: number | string, curve?: GlideCurve, mode?: GlideMode) =>
+            makeGlide(pattern, g, curve, mode),
     });
     Object.defineProperty(modifiable, 'cycle', { enumerable: false });
     Object.defineProperty(modifiable, 'fast', { enumerable: false });
