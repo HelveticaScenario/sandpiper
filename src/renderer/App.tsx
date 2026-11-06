@@ -11,7 +11,11 @@ import { ErrorDisplay } from './components/ErrorDisplay';
 import { Settings } from './components/Settings';
 import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
-import { SessionButton, SessionPanel } from './components/SessionPanel';
+import {
+    type SessionActivity,
+    SessionButton,
+    SessionPanel,
+} from './components/SessionPanel';
 import { useSessionState } from './hooks/useSessionState';
 import { useCustomMonaco } from './hooks/useCustomMonaco';
 import { useSharedEditing } from './session/useSharedEditing';
@@ -105,6 +109,7 @@ import {
 import { loadAndInstallKeymap, setWhenEvaluator } from './keybindings/keymap';
 import { evaluateWhen } from './keybindings/contextKey';
 import { getBufferId } from './app/buffers';
+import type { RemoteEvalEvent } from '../shared/ipcTypes';
 import {
     setTransport,
     updateTransport,
@@ -284,6 +289,28 @@ function App() {
     useEffect(() => {
         isSharedFileRef.current = isSharedFile;
     }, [isSharedFile]);
+    const [sessionActivity, setSessionActivity] =
+        useState<SessionActivity | null>(null);
+    const sessionActivityIdRef = useRef(0);
+    const announceSessionChange = useCallback(
+        (author: SessionActivity['author'], atBar: number, originBar: number) => {
+            sessionActivityIdRef.current += 1;
+            setSessionActivity({
+                author,
+                id: sessionActivityIdRef.current,
+                songBar: atBar - originBar + 1,
+            });
+        },
+        [],
+    );
+    const sessionSelfRef = useRef(sessionState);
+    useEffect(() => {
+        sessionSelfRef.current = sessionState;
+    }, [sessionState]);
+    const buffersRef = useRef(buffers);
+    useEffect(() => {
+        buffersRef.current = buffers;
+    }, [buffers]);
     const performanceTheme = useMemo(
         () => themes.find((t) => t.id === performanceView.themeId) ?? theme,
         [themes, theme, performanceView.themeId],
@@ -1953,24 +1980,45 @@ function App() {
         handleOpenWorkspaceRef.current = selectWorkspaceFolder;
     }, [selectWorkspaceFolder]);
 
-    const handleSubmitRef = useRef((_trigger?: QueuedTrigger) => {});
+    // Submits the visible buffer, or shows a live-session peer's evaluation
+    // that the main process already built and queued (`remote`).
+    const handleSubmitRef = useRef(
+        (_trigger?: QueuedTrigger, _remote?: RemoteEvalEvent) => {},
+    );
     useEffect(() => {
-        handleSubmitRef.current = async (trigger?: QueuedTrigger) => {
-            if (!activeBufferId) {
+        handleSubmitRef.current = async (
+            trigger?: QueuedTrigger,
+            remote?: RemoteEvalEvent,
+        ) => {
+            const targetBufferId = remote ? remote.filePath : activeBufferId;
+            if (!targetBufferId) {
                 return;
             }
+            // Editor-anchored UI (scopes, meters, controls) attaches only
+            // when the evaluated buffer is the one on screen.
+            const isVisibleTarget = targetBufferId === activeBufferId;
             try {
                 const patchCodeValue = patchCodeRef.current;
-                const submittedSourceId = activeSourceIdRef.current ?? null;
+                const submittedSourceId = isVisibleTarget
+                    ? (activeSourceIdRef.current ?? null)
+                    : null;
+                const activeBuffer = buffersRef.current.find(
+                    (b) => getBufferId(b) === activeBufferId,
+                );
 
                 // Execute DSL in main process (has direct N-API access).
                 // Use the stable buffer id (not activeBufferId, a file's mutable
                 // path) so reconciliation/clock-reset key on the buffer itself.
-                const result = await electronAPI.executeDSL(
-                    patchCodeValue,
-                    submittedSourceId ?? undefined,
-                    trigger,
-                );
+                const result = remote
+                    ? remote.result
+                    : await electronAPI.executeDSL(
+                          patchCodeValue,
+                          submittedSourceId ?? undefined,
+                          trigger,
+                          activeBuffer?.kind === 'file'
+                              ? activeBuffer.filePath
+                              : undefined,
+                      );
                 lastPatchResultRef.current = result;
 
                 if (!result.success) {
@@ -1983,7 +2031,11 @@ function App() {
                         setActiveInterpolationResolutions(map);
                     }
                     if (result.errorMessage) {
-                        setError(result.errorMessage);
+                        setError(
+                            remote
+                                ? `${remote.author.name}'s change could not play here: ${result.errorMessage}`
+                                : result.errorMessage,
+                        );
                         setValidationErrors(null);
                     } else if (result.errors && result.errors.length > 0) {
                         // Extract and transform validation errors to show source lines
@@ -2004,13 +2056,33 @@ function App() {
                     return;
                 }
 
+                // Only a change that will play is announced.
+                const session = sessionSelfRef.current;
+                if (remote) {
+                    announceSessionChange(
+                        remote.author,
+                        remote.atBar,
+                        remote.originBar,
+                    );
+                } else if (
+                    result.sessionAtBar !== undefined &&
+                    result.sessionOriginBar !== undefined &&
+                    session.status === 'active'
+                ) {
+                    announceSessionChange(
+                        session.self,
+                        result.sessionAtBar,
+                        result.sessionOriginBar,
+                    );
+                }
+
                 const previousRunning = {
                     bufferId: runningBufferIdRef.current,
                     sourceId: runningSourceIdRef.current,
                 };
                 setIsClockRunning(true);
-                setRunningBufferId(activeBufferId);
-                runningSourceIdRef.current = activeSourceIdRef.current ?? null;
+                setRunningBufferId(targetBufferId);
+                runningSourceIdRef.current = submittedSourceId;
                 setError(null);
                 setValidationErrors(null);
 
@@ -2022,7 +2094,7 @@ function App() {
                 const scopes = result.appliedPatch?.scopes || [];
                 const { callSiteSpans } = result;
 
-                const editorInstance = editorRef.current;
+                const editorInstance = isVisibleTarget ? editorRef.current : null;
                 const model = editorInstance?.getModel();
 
                 const previewAnchors = editorInstance
@@ -2030,7 +2102,7 @@ function App() {
                           editorInstance,
                           result.videoPreviews ?? [],
                           callSiteSpans,
-                          activeBufferId,
+                          targetBufferId,
                       )
                     : { decorations: null, zones: [] };
 
@@ -2079,7 +2151,7 @@ function App() {
                     views.push({
                         channelKeys,
                         decorationIndex: range ? decorationDescs.length : null,
-                        file: activeBufferId,
+                        file: targetBufferId,
                         key: scopeKey,
                         range: scope.range ?? [-5, 5],
                         split: scope.split ?? null,
@@ -2180,9 +2252,13 @@ function App() {
                     : null;
 
                 // For queued (non-immediate) triggers, defer UI state until the
-                // Audio thread actually applies the patch update.
+                // Audio thread actually applies the patch update. A live
+                // session's evaluations always wait for their bar.
                 const isDeferred =
-                    trigger === 'NextBar' || trigger === 'NextBeat';
+                    trigger === 'NextBar' ||
+                    trigger === 'NextBeat' ||
+                    result.sessionAtBar !== undefined ||
+                    remote !== undefined;
 
                 if (isDeferred && result.updateId != null) {
                     // Stash both new decorations and UI state; keep old
@@ -2248,11 +2324,21 @@ function App() {
         };
     }, [
         activeBufferId,
+        announceSessionChange,
         clearVuGhosts,
         commitControlAnchors,
         commitVideoPreviews,
         eqController,
     ]);
+
+    // A peer's evaluation is already queued in the engine; show it.
+    useEffect(
+        () =>
+            electronAPI.session.onRemoteEval((event) => {
+                handleSubmitRef.current(undefined, event);
+            }),
+        [],
+    );
 
     // Expose test API for E2E tests
     useEffect(() => {
@@ -2852,6 +2938,7 @@ function App() {
                     onUpdatePatch={() => handleSubmitRef.current()}
                 />
                 <SessionButton
+                    activity={sessionActivity}
                     state={sessionState}
                     onOpen={() => setIsSessionOpen(true)}
                 />

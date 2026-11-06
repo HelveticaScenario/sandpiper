@@ -178,6 +178,11 @@
     gap: 4px;
 }
 
+.session-activity {
+    margin-right: 6px;
+    white-space: nowrap;
+}
+
 /* Remote cursors in the editor. Per-peer colours and names come from the
    style element useSharedEditing maintains. */
 .yRemoteSelectionHead {

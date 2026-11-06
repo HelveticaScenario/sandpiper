@@ -25,7 +25,7 @@ import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
 import type { EqPanelDef } from './dsl/eqPanelTypes';
-import type { SessionState } from './session';
+import type { SessionPeer, SessionState } from './session';
 import type {
     VideoCvValue,
     VideoPreviewSite,
@@ -203,6 +203,10 @@ export interface SerializedResolvedInterpolation {
 
 export interface DSLExecuteResult {
     success: boolean;
+    /** The session bar the patch plays on, when it plays for a live session. */
+    sessionAtBar?: number;
+    /** The session bar the playing song's bar count started on. */
+    sessionOriginBar?: number;
     errors?: ApplyPatchError[];
     appliedPatch?: PatchGraph;
     moduleIdRemap?: Record<string, string>;
@@ -311,6 +315,16 @@ export interface ContextMenuAction {
     bufferId?: string;
     /** Set when `command === 'editor'`: the id to dispatch in the renderer. */
     commandId?: string;
+}
+
+/** A live-session peer's evaluation, built and queued on this machine. */
+export interface RemoteEvalEvent {
+    result: DSLExecuteResult;
+    /** The shared file the source came from, or null if it is not on disk yet. */
+    filePath: string | null;
+    author: SessionPeer;
+    atBar: number;
+    originBar: number;
 }
 
 /**
@@ -446,6 +460,7 @@ export const IPC_CHANNELS = {
     SESSION_AWARENESS_UPDATE: 'modular:session:awareness-update',
     SESSION_ON_DOC_UPDATE: 'modular:session:on-doc-update',
     SESSION_ON_AWARENESS_UPDATE: 'modular:session:on-awareness-update',
+    SESSION_ON_REMOTE_EVAL: 'modular:session:on-remote-eval',
 
     // Update operations
     UPDATE_CHECK: 'modular:update:check',
@@ -487,10 +502,15 @@ export interface IPCHandlers {
     [IPC_CHANNELS.GET_SCHEMAS]: () => typeof schemas;
 
     // DSL operations
+    /**
+     * `sharedPath` names the file the source came from; in a live session a
+     * shared file's evaluation plays for every peer on the next bar.
+     */
     [IPC_CHANNELS.DSL_EXECUTE]: (
         source: string,
         sourceId?: string,
         trigger?: QueuedTrigger,
+        sharedPath?: string,
     ) => DSLExecuteResult;
     [IPC_CHANNELS.GET_DSL_LIB_SOURCE]: () => string;
 
@@ -681,6 +701,8 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SESSION_AWARENESS_UPDATE]: (update: Uint8Array) => void;
     [IPC_CHANNELS.SESSION_ON_DOC_UPDATE]: (update: Uint8Array) => void;
     [IPC_CHANNELS.SESSION_ON_AWARENESS_UPDATE]: (update: Uint8Array) => void;
+    /** A peer's evaluation was built and queued to play on `atBar`. */
+    [IPC_CHANNELS.SESSION_ON_REMOTE_EVAL]: (event: RemoteEvalEvent) => void;
 
     /** A watched file changed on disk; `content` is as FS_READ_FILE returns. */
     [IPC_CHANNELS.FS_ON_FILE_CHANGED]: (change: FileChange) => void;

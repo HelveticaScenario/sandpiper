@@ -128,6 +128,18 @@ export class WorkspaceMirror {
         return this.entryAt(absolutePath)?.kind === 'text';
     }
 
+    /** The id of the shared file at `absolutePath`, or null. */
+    fileIdAt(absolutePath: string): string | null {
+        const entry = this.entryAt(absolutePath);
+        return entry?.kind === 'text' ? entry.id : null;
+    }
+
+    /** Where the shared file `fileId` is on disk, or null. */
+    pathOf(fileId: string): string | null {
+        const mirrored = this.mirrored.get(fileId);
+        return mirrored?.kind === 'text' ? this.absolute(mirrored.path) : null;
+    }
+
     /**
      * Handle a save. Saving a shared file's buffer needs nothing, since the
      * document is already current; `replace` (saving other content over the

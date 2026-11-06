@@ -20,6 +20,7 @@ import {
 import type {
     FileChange,
     QueuedTrigger,
+    RemoteEvalEvent,
     WorkspaceFolder,
 } from '../shared/ipcTypes';
 import type { SessionState } from '../shared/session';
@@ -59,6 +60,7 @@ export interface ElectronAPI {
         source: string,
         sourceId?: string,
         trigger?: QueuedTrigger,
+        sharedPath?: string,
     ) => Promise<DSLExecuteResult>;
     getDslLibSource: () => Promise<string>;
 
@@ -350,6 +352,9 @@ export interface ElectronAPI {
         onAwarenessUpdate: (
             callback: (update: Uint8Array) => void,
         ) => () => void;
+        onRemoteEval: (
+            callback: (event: RemoteEvalEvent) => void,
+        ) => () => void;
     };
     onMenuOpenSession: (callback: () => void) => () => void;
 }
@@ -362,8 +367,8 @@ const electronAPI: ElectronAPI = {
     getSchemas: (...args) => invokeIPC('GET_SCHEMAS', ...args),
 
     // DSL operations
-    executeDSL: (source, sourceId, trigger) =>
-        invokeIPC('DSL_EXECUTE', source, sourceId, trigger),
+    executeDSL: (source, sourceId, trigger, sharedPath) =>
+        invokeIPC('DSL_EXECUTE', source, sourceId, trigger, sharedPath),
     getDslLibSource: () => invokeIPC('GET_DSL_LIB_SOURCE'),
 
     // Window operations
@@ -664,6 +669,9 @@ const electronAPI: ElectronAPI = {
         ),
         onAwarenessUpdate: menuEventHandler<[Uint8Array]>(
             IPC_CHANNELS.SESSION_ON_AWARENESS_UPDATE,
+        ),
+        onRemoteEval: menuEventHandler<[RemoteEvalEvent]>(
+            IPC_CHANNELS.SESSION_ON_REMOTE_EVAL,
         ),
     },
     onMenuOpenSession: menuEventHandler(MENU_CHANNELS.OPEN_SESSION),

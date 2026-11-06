@@ -221,14 +221,41 @@ export function SessionPanel({
     );
 }
 
-/** Header button that opens the session panel and shows who is connected. */
+/** The latest patch change in a live session, for the header. */
+export interface SessionActivity {
+    author: SessionPeer;
+    /** The song bar (counting from 1, as the transport shows it) the change plays on. */
+    songBar: number;
+    /** Distinguishes repeated changes by the same author on the same bar. */
+    id: number;
+}
+
+/** How long a patch change stays announced in the header. */
+const ACTIVITY_MS = 4000;
+
+/**
+ * Header button that opens the session panel, shows who is connected, and
+ * briefly names whoever last changed the patch and the bar it plays on.
+ */
 export function SessionButton({
     state,
     onOpen,
+    activity,
 }: {
     state: SessionState;
     onOpen: () => void;
+    activity: SessionActivity | null;
 }) {
+    const [expiredId, setExpiredId] = useState<number | null>(null);
+    useEffect(() => {
+        if (!activity) {
+            return;
+        }
+        const timer = setTimeout(() => setExpiredId(activity.id), ACTIVITY_MS);
+        return () => clearTimeout(timer);
+    }, [activity]);
+    const shown = activity && activity.id !== expiredId ? activity : null;
+
     if (state.status === 'idle') {
         return (
             <button
@@ -247,6 +274,17 @@ export function SessionButton({
             onClick={onOpen}
             title={people.map((p) => p.name).join(', ')}
         >
+            {shown && (
+                <span
+                    className="session-activity"
+                    style={{ color: shown.author.color }}
+                >
+                    {shown.author.id === state.self.id
+                        ? 'You'
+                        : shown.author.name}{' '}
+                    → bar {shown.songBar}
+                </span>
+            )}
             {people.map((peer) => (
                 <span
                     key={peer.id}
