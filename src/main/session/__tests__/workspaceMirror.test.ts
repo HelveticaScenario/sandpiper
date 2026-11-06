@@ -511,7 +511,11 @@ describe('WorkspaceMirror assets', () => {
 
         const id = listEntries(a).find((e) => e.kind === 'blob')!.id;
         filesMap(a).get(id)!.set('path', 'drums/snare.wav');
-        await waitFor(() => exists(guestRoot, 'drums/snare.wav'));
+        await waitFor(
+            () =>
+                exists(hostRoot, 'drums/snare.wav') &&
+                exists(guestRoot, 'drums/snare.wav'),
+        );
         expect(exists(guestRoot, 'snare.wav')).toBe(false);
 
         fs.rmSync(path.join(hostRoot, 'drums/snare.wav'));
