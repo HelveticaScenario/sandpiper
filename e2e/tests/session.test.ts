@@ -43,7 +43,7 @@ test.afterEach(async () => {
     }
 });
 
-async function launch(files: Record<string, string>): Promise<Peer> {
+async function launch(files: Record<string, string | Buffer>): Promise<Peer> {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-session-ws-'));
     for (const [rel, content] of Object.entries(files)) {
         fs.mkdirSync(path.dirname(path.join(workspace, rel)), { recursive: true });
@@ -250,8 +250,9 @@ test.describe('live session', () => {
         expect(fs.existsSync(path.join(host.workspace, 'songs/verse.js'))).toBe(false);
         await eventually(() => !fs.existsSync(path.join(host.workspace, 'chorus.js')));
 
-        // Audio stays local to the host until assets sync.
-        expect(fs.existsSync(path.join(guestRoot, 'wavs/kick.wav'))).toBe(false);
+        // Assets arrive too, byte for byte.
+        await eventually(() => fs.existsSync(path.join(guestRoot, 'wavs/kick.wav')));
+        expect(fs.readFileSync(path.join(guestRoot, 'wavs/kick.wav'), 'utf8')).toBe('RIFF');
 
         // The guest leaves: the host is alone again, and the guest keeps the
         // session folder.
@@ -354,4 +355,57 @@ test.describe('live session', () => {
         const [h2, g2] = await Promise.all([transport(host.page), transport(guest.page)]);
         expect(Math.abs(h2.sessionBar - g2.sessionBar)).toBeLessThan(0.05);
     });
+
+    test('assets reach every peer and patches that use them play there', async () => {
+        const host = await launch({
+            'patch.js': '$sampler($wavs().kick, 5).out()\n',
+            'wavs/kick.wav': wavFile(4410),
+        });
+        const guest = await launch({});
+        const invite = await startSession(host.page, 'Ada');
+        await joinSession(guest.page, invite, 'Bo');
+        const guestRoot = await workspaceOf(guest.page);
+        await eventually(() => fs.existsSync(path.join(guestRoot, 'wavs/kick.wav')));
+        expect(
+            fs
+                .readFileSync(path.join(guestRoot, 'wavs/kick.wav'))
+                .equals(fs.readFileSync(path.join(host.workspace, 'wavs/kick.wav'))),
+        ).toBe(true);
+        for (const peer of [host, guest]) {
+            await eventually(async () => (await transport(peer.page)).sessionClockActive);
+        }
+
+        await openFile(host.page, 'patch.js');
+        await host.page.evaluate(() => window.__TEST_API__!.executePatch());
+        expect((await lastResult(host.page)).success).toBe(true);
+        const guestResult = await lastResult(guest.page);
+        expect(guestResult.errorMessage).toBeUndefined();
+        expect(guestResult.success).toBe(true);
+
+        // A sample added on the guest reaches the host.
+        fs.writeFileSync(path.join(guestRoot, 'wavs/snare.wav'), wavFile(2205));
+        await eventually(() =>
+            fs.existsSync(path.join(host.workspace, 'wavs/snare.wav')),
+        );
+    });
 });
+
+/** A short, valid 16-bit mono WAV of silence. */
+function wavFile(frames: number): Buffer {
+    const data = frames * 2;
+    const wav = Buffer.alloc(44 + data);
+    wav.write('RIFF', 0);
+    wav.writeUInt32LE(36 + data, 4);
+    wav.write('WAVE', 8);
+    wav.write('fmt ', 12);
+    wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20);
+    wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(44100, 24);
+    wav.writeUInt32LE(88200, 28);
+    wav.writeUInt16LE(2, 32);
+    wav.writeUInt16LE(16, 34);
+    wav.write('data', 36);
+    wav.writeUInt32LE(data, 40);
+    return wav;
+}

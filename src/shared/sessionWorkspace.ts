@@ -14,10 +14,17 @@ import * as Y from 'yjs';
 
 export const FILES_KEY = 'files';
 
-export type FileKind = 'text' | 'dir';
+/**
+ * `text` files are edited live; `blob` files (audio, video, images) are
+ * shared by content hash and transferred whole; `dir` entries keep empty
+ * folders.
+ */
+export type FileKind = 'text' | 'blob' | 'dir';
 
 export const MAX_SHARED_TEXT_BYTES = 1024 * 1024;
 export const MAX_SHARED_FILES = 2000;
+/** Largest asset file shared with peers. */
+export const MAX_SHARED_BLOB_BYTES = 512 * 1024 * 1024;
 /**
  * Total shared text. A joining peer receives the whole document in one
  * message, which must stay under the session's frame limit.
@@ -49,12 +56,31 @@ export interface FileEntry {
     path: string;
     kind: FileKind;
     text?: Y.Text;
+    /** SHA-256 of a blob's content. */
+    hash?: string;
+    size?: number;
 }
 
 export function readEntry(id: string, entry: Y.Map<unknown>): FileEntry | null {
     const path = entry.get('path');
     const kind = entry.get('kind');
-    if (typeof path !== 'string' || (kind !== 'text' && kind !== 'dir')) {
+    if (typeof path !== 'string') {
+        return null;
+    }
+    if (kind === 'blob') {
+        const hash = entry.get('hash');
+        const size = entry.get('size');
+        if (
+            typeof hash !== 'string' ||
+            !/^[0-9a-f]{64}$/.test(hash) ||
+            typeof size !== 'number' ||
+            !(size >= 0 && size <= MAX_SHARED_BLOB_BYTES)
+        ) {
+            return null;
+        }
+        return { hash, id, kind, path, size };
+    }
+    if (kind !== 'text' && kind !== 'dir') {
         return null;
     }
     const text = entry.get('text');
@@ -252,6 +278,22 @@ export function createTextEntry(doc: Y.Doc, path: string, content: string): stri
     entry.set('path', path);
     entry.set('kind', 'text');
     entry.set('text', text);
+    filesMap(doc).set(id, entry);
+    return id;
+}
+
+export function createBlobEntry(
+    doc: Y.Doc,
+    path: string,
+    hash: string,
+    size: number,
+): string {
+    const id = newFileId();
+    const entry = new Y.Map<unknown>();
+    entry.set('path', path);
+    entry.set('kind', 'blob');
+    entry.set('hash', hash);
+    entry.set('size', size);
     filesMap(doc).set(id, entry);
     return id;
 }

@@ -1,12 +1,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as Y from 'yjs';
+import type { BlobStore } from './blobStore';
 import {
     type FileEntry,
+    MAX_SHARED_BLOB_BYTES,
     MAX_SHARED_FILES,
     MAX_SHARED_TEXT_BYTES,
     MAX_SHARED_TOTAL_TEXT_BYTES,
     applyTextDiff,
+    createBlobEntry,
     createDirEntry,
     createTextEntry,
     filesMap,
@@ -30,12 +33,25 @@ export interface WorkspaceMirrorOptions {
     fromDisk: (relativePath: string, content: string) => string;
     /** Called after files appear, disappear or move on disk. */
     onTreeChanged: () => void;
+    /** Shares asset files; without it only text files are shared. */
+    blobs?: MirrorBlobs;
+}
+
+export interface MirrorBlobs {
+    store: BlobStore;
+    /** Get a blob from peers into the store; false if that became impossible. */
+    fetch: (hash: string) => Promise<boolean>;
+    /** A peer's asset finished arriving on disk. */
+    onArrived: () => void;
 }
 
 interface Mirrored {
     path: string;
-    kind: 'text' | 'dir';
-    /** Text as last written to or read from disk, before `toDisk`. */
+    kind: 'text' | 'blob' | 'dir';
+    /**
+     * Text as last written to or read from disk (before `toDisk`), or a
+     * blob's hash.
+     */
     content: string;
 }
 
@@ -58,6 +74,10 @@ export class WorkspaceMirror {
     private reconcileTimer: NodeJS.Timeout | null = null;
     private readonly diskTimers = new Map<string, NodeJS.Timeout>();
     private disposed = false;
+    /** Blobs being fetched or written, by `${id}:${hash}`. */
+    private readonly blobsInFlight = new Set<string>();
+    /** Asset paths whose first hashing (seeding) has not finished. */
+    private readonly seedingBlobs = new Set<string>();
     private readonly observer = () => this.scheduleReconcile();
 
     constructor(doc: Y.Doc, root: string, options: WorkspaceMirrorOptions) {
@@ -251,6 +271,141 @@ export class WorkspaceMirror {
         this.reconcileNow();
     }
 
+    /** The size of a file worth sharing as an asset, or null. */
+    private blobSize(absolute: string): number | null {
+        if (!this.options.blobs) {
+            return null;
+        }
+        try {
+            const { size } = fs.statSync(absolute);
+            return size <= MAX_SHARED_BLOB_BYTES ? size : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /** Hash the host's assets in the background and add them to the document. */
+    private async seedBlobs(
+        blobs: Array<{ rel: string; absolute: string; size: number }>,
+    ): Promise<void> {
+        const store = this.options.blobs?.store;
+        for (const blob of blobs) {
+            try {
+                if (!store || this.disposed) {
+                    return;
+                }
+                if (listEntries(this.doc).length >= MAX_SHARED_FILES) {
+                    return;
+                }
+                const hash = await store.register(blob.absolute);
+                if (this.disposed) {
+                    return;
+                }
+                let id = '';
+                this.doc.transact(() => {
+                    id = createBlobEntry(this.doc, blob.rel, hash, blob.size);
+                }, MIRROR_ORIGIN);
+                this.mirrored.set(id, { content: hash, kind: 'blob', path: blob.rel });
+            } catch (error) {
+                console.warn(`[session] cannot share ${blob.rel}`, error);
+            } finally {
+                this.seedingBlobs.delete(blob.rel);
+            }
+        }
+        if (!this.disposed) {
+            this.scheduleReconcile();
+        }
+    }
+
+    /** Fetch and write a blob entry whose content is not on disk yet. */
+    private syncBlob(entry: FileEntry, mirrored: Mirrored | undefined): void {
+        const blobs = this.options.blobs;
+        const hash = entry.hash;
+        if (!blobs || !hash || mirrored?.content === hash) {
+            return;
+        }
+        const key = `${entry.id}:${hash}`;
+        if (this.blobsInFlight.has(key)) {
+            return;
+        }
+        this.blobsInFlight.add(key);
+        void (async () => {
+            try {
+                const available = blobs.store.has(hash) || (await blobs.fetch(hash));
+                if (!available || this.disposed) {
+                    return;
+                }
+                // The entry may have moved, changed or gone while fetching.
+                const now = listEntries(this.doc);
+                const current = now.find((e) => e.id === entry.id);
+                if (current?.hash !== hash) {
+                    return;
+                }
+                const target = resolveEffectivePaths(now).get(entry.id)!;
+                const before = this.mirrored.get(entry.id);
+                await blobs.store.materialize(hash, this.absolute(target));
+                if (this.disposed) {
+                    return;
+                }
+                this.mirrored.set(entry.id, { content: hash, kind: 'blob', path: target });
+                if (before && before.path !== target) {
+                    this.removeFile(before.path);
+                }
+                this.options.onTreeChanged();
+                blobs.onArrived();
+            } catch (error) {
+                console.warn(`[session] cannot write ${entry.path}`, error);
+            } finally {
+                this.blobsInFlight.delete(key);
+                this.scheduleReconcile();
+            }
+        })();
+    }
+
+    /** Take an asset another program added or changed into the document. */
+    private async checkBlob(rel: string, absolute: string, size: number): Promise<void> {
+        const store = this.options.blobs?.store;
+        if (!store || this.seedingBlobs.has(rel)) {
+            return;
+        }
+        let hash: string;
+        try {
+            hash = await store.register(absolute);
+        } catch {
+            return;
+        }
+        if (this.disposed) {
+            return;
+        }
+        const id = this.idAt(rel);
+        const mirrored = id ? this.mirrored.get(id) : undefined;
+        if (id && mirrored) {
+            if (mirrored.kind !== 'blob' || mirrored.content === hash) {
+                return;
+            }
+            const entry = filesMap(this.doc).get(id);
+            if (!entry) {
+                return;
+            }
+            mirrored.content = hash;
+            this.doc.transact(() => {
+                entry.set('hash', hash);
+                entry.set('size', size);
+            }, MIRROR_ORIGIN);
+            return;
+        }
+        if (listEntries(this.doc).length >= MAX_SHARED_FILES) {
+            return;
+        }
+        let newId = '';
+        this.doc.transact(() => {
+            newId = createBlobEntry(this.doc, rel, hash, size);
+        }, MIRROR_ORIGIN);
+        this.mirrored.set(newId, { content: hash, kind: 'blob', path: rel });
+        this.reconcileNow();
+        this.options.onTreeChanged();
+    }
+
     /** Whether one more file of `content` fits within the session's limits. */
     private hasRoomFor(content: string): boolean {
         const bytes = Buffer.byteLength(content);
@@ -294,6 +449,7 @@ export class WorkspaceMirror {
     private seedFromDisk(): void {
         const found: Array<{ rel: string; content: string } | { dir: string }> =
             [];
+        const blobs: Array<{ rel: string; absolute: string; size: number }> = [];
         let totalBytes = 0;
         const walk = (dir: string, relDir: string) => {
             let names: fs.Dirent[];
@@ -317,7 +473,13 @@ export class WorkspaceMirror {
                 if (dirent.isDirectory()) {
                     sawEntry = true;
                     walk(absolute, rel);
-                } else if (dirent.isFile() && isSharedTextPath(rel)) {
+                } else if (dirent.isFile() && !isSharedTextPath(rel)) {
+                    const size = this.blobSize(absolute);
+                    if (size !== null) {
+                        sawEntry = true;
+                        blobs.push({ absolute, rel, size });
+                    }
+                } else if (dirent.isFile()) {
                     const content = this.readShareable(absolute, rel);
                     const bytes = content === null ? 0 : Buffer.byteLength(content);
                     if (
@@ -335,6 +497,10 @@ export class WorkspaceMirror {
             }
         };
         walk(this.root, '');
+        for (const blob of blobs) {
+            this.seedingBlobs.add(blob.rel);
+        }
+        void this.seedBlobs(blobs);
         // Seeded files are already on disk as they are; recording them as
         // mirrored keeps the first reconcile from rewriting them.
         this.doc.transact(() => {
@@ -402,10 +568,10 @@ export class WorkspaceMirror {
                 continue;
             }
             this.mirrored.delete(id);
-            if (mirrored.kind === 'text') {
-                this.removeFile(mirrored.path);
-            } else {
+            if (mirrored.kind === 'dir') {
                 this.removeDirIfEmpty(mirrored.path);
+            } else {
+                this.removeFile(mirrored.path);
             }
             treeChanged = true;
         }
@@ -416,7 +582,7 @@ export class WorkspaceMirror {
             [];
         for (const [id, mirrored] of this.mirrored) {
             const target = effective.get(id);
-            if (target && target !== mirrored.path && mirrored.kind === 'text') {
+            if (target && target !== mirrored.path && mirrored.kind !== 'dir') {
                 moves.push({
                     from: mirrored.path,
                     id,
@@ -464,6 +630,10 @@ export class WorkspaceMirror {
                 }
                 continue;
             }
+            if (entry.kind === 'blob') {
+                this.syncBlob(entry, mirrored);
+                continue;
+            }
             const content = entry.text?.toJSON() ?? '';
             if (!mirrored || mirrored.content !== content) {
                 if (this.writeFile(target, content)) {
@@ -509,7 +679,8 @@ export class WorkspaceMirror {
             stat = null;
         }
         if (!stat) {
-            if (id && this.mirrored.get(id)?.kind === 'text') {
+            const kind = id ? this.mirrored.get(id)?.kind : undefined;
+            if (id && (kind === 'text' || kind === 'blob')) {
                 this.mirrored.delete(id);
                 this.doc.transact(() => filesMap(this.doc).delete(id), MIRROR_ORIGIN);
                 this.options.onTreeChanged();
@@ -534,7 +705,17 @@ export class WorkspaceMirror {
             }
             return;
         }
-        if (!stat.isFile() || !isSharedTextPath(rel)) {
+        if (!stat.isFile()) {
+            return;
+        }
+        if (!isSharedTextPath(rel)) {
+            const size = this.blobSize(absolute);
+            const inFlight = id
+                ? [...this.blobsInFlight].some((key) => key.startsWith(`${id}:`))
+                : false;
+            if (size !== null && !inFlight) {
+                void this.checkBlob(rel, absolute, size);
+            }
             return;
         }
         const content = this.readShareable(absolute, rel);

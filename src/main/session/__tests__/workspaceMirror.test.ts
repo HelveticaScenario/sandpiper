@@ -4,12 +4,14 @@ import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+    createBlobEntry,
     createDirEntry,
     createTextEntry,
     filesMap,
     listEntries,
 } from '../../../shared/sessionWorkspace';
-import { WorkspaceMirror } from '../workspaceMirror';
+import { BlobStore } from '../blobStore';
+import { type MirrorBlobs, WorkspaceMirror } from '../workspaceMirror';
 import { sleep, waitFor } from './meshTestUtils';
 
 type WatchListener = (event: fs.WatchEventType, filename: string | Buffer | null) => void;
@@ -66,9 +68,15 @@ function exists(root: string, rel: string): boolean {
     return fs.existsSync(path.join(root, rel));
 }
 
-function startMirror(doc: Y.Doc, root: string, seed: boolean) {
+function startMirror(
+    doc: Y.Doc,
+    root: string,
+    seed: boolean,
+    blobs?: MirrorBlobs,
+) {
     let treeChanges = 0;
     const m = new WorkspaceMirror(doc, root, {
+        blobs,
         fromDisk: (rel, content) =>
             rel.endsWith('.js') && content.startsWith(STAMP)
                 ? content.slice(STAMP.length)
@@ -435,6 +443,112 @@ describe('WorkspaceMirror robustness', () => {
             }
         }
         expect(added).toBe(24);
+    });
+});
+
+/**
+ * Two peers' asset stores, where fetching copies a blob from whichever other
+ * store has it, as the transfer between connected peers does.
+ */
+function linkedStores() {
+    const stores = [new BlobStore(tempDir()), new BlobStore(tempDir())];
+    const arrivals = [0, 0];
+    const blobs = stores.map(
+        (store, i): MirrorBlobs => ({
+            fetch: async (hash) => {
+                const other = stores[1 - i].readablePath(hash);
+                if (!other) {
+                    return false;
+                }
+                await store.addFile(other);
+                return true;
+            },
+            onArrived: () => {
+                arrivals[i]++;
+            },
+            store,
+        }),
+    );
+    return { arrivals, blobs, stores };
+}
+
+describe('WorkspaceMirror assets', () => {
+    it('shares the host’s assets by hash without copying them', async () => {
+        const [a, b] = linkedDocs();
+        const { arrivals, blobs, stores } = linkedStores();
+        const hostRoot = tempDir();
+        const kick = Buffer.from('RIFF....WAVEfmt kick');
+        write(hostRoot, 'wavs/kick.wav', kick);
+        startMirror(a, hostRoot, true, blobs[0]);
+        await waitFor(() => listEntries(a).some((e) => e.kind === 'blob'));
+        const entry = listEntries(a).find((e) => e.kind === 'blob')!;
+        expect(entry).toMatchObject({ path: 'wavs/kick.wav', size: kick.length });
+        // Registered in place, not copied into the store.
+        expect(fs.readdirSync(stores[0].dir)).toEqual([]);
+
+        const guestRoot = tempDir();
+        startMirror(b, guestRoot, false, blobs[1]);
+        await waitFor(() => exists(guestRoot, 'wavs/kick.wav'));
+        expect(fs.readFileSync(path.join(guestRoot, 'wavs/kick.wav')).equals(kick)).toBe(
+            true,
+        );
+        expect(arrivals[1]).toBe(1);
+    });
+
+    it('follows changes, renames and deletions of assets', async () => {
+        const [a, b] = linkedDocs();
+        const { blobs } = linkedStores();
+        const hostRoot = tempDir();
+        write(hostRoot, 'snare.wav', 'v1');
+        startMirror(a, hostRoot, true, blobs[0]);
+        const guestRoot = tempDir();
+        startMirror(b, guestRoot, false, blobs[1]);
+        await waitFor(() => exists(guestRoot, 'snare.wav'));
+
+        // Another program replaces the sample on the host.
+        write(hostRoot, 'snare.wav', 'v2 longer');
+        await waitFor(() => read(guestRoot, 'snare.wav') === 'v2 longer', 5000);
+
+        const id = listEntries(a).find((e) => e.kind === 'blob')!.id;
+        filesMap(a).get(id)!.set('path', 'drums/snare.wav');
+        await waitFor(() => exists(guestRoot, 'drums/snare.wav'));
+        expect(exists(guestRoot, 'snare.wav')).toBe(false);
+
+        fs.rmSync(path.join(hostRoot, 'drums/snare.wav'));
+        await waitFor(() => !exists(guestRoot, 'drums/snare.wav'), 5000);
+    });
+
+    it('shares an asset a guest drops into its folder', async () => {
+        const [a, b] = linkedDocs();
+        const { blobs } = linkedStores();
+        const hostRoot = tempDir();
+        startMirror(a, hostRoot, true, blobs[0]);
+        const guestRoot = tempDir();
+        startMirror(b, guestRoot, false, blobs[1]);
+        await sleep(50);
+        write(guestRoot, 'loops/break.wav', 'amen');
+        await waitFor(() => exists(hostRoot, 'loops/break.wav'), 5000);
+        expect(read(hostRoot, 'loops/break.wav')).toBe('amen');
+    });
+
+    it('keeps a blob entry off disk until its content can be fetched', async () => {
+        const doc = new Y.Doc();
+        const root = tempDir();
+        let release: (ok: boolean) => void = () => {};
+        const store = new BlobStore(tempDir());
+        startMirror(doc, root, false, {
+            fetch: () => new Promise((resolve) => (release = resolve)),
+            onArrived: () => {},
+            store,
+        });
+        doc.transact(() =>
+            createBlobEntry(doc, 'far.wav', 'a'.repeat(64), 10),
+        );
+        await sleep(100);
+        expect(exists(root, 'far.wav')).toBe(false);
+        release(false);
+        await sleep(50);
+        expect(exists(root, 'far.wav')).toBe(false);
     });
 });
 

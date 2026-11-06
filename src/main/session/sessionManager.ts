@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import type {
+    SessionAssetProgress,
     SessionNotice,
     SessionPeer,
     SessionRole,
@@ -44,7 +45,14 @@ export interface SessionManagerEvents {
 interface Active extends ActiveSession {
     invite: string;
     notices: SessionNotice[];
+    assets: SessionAssetProgress;
 }
+
+const NO_ASSETS: SessionAssetProgress = {
+    pending: 0,
+    receivedBytes: 0,
+    totalBytes: 0,
+};
 
 /** Starts, joins and leaves the one live session this app can be in. */
 export class SessionManager extends EventEmitter<SessionManagerEvents> {
@@ -65,6 +73,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
             return { status: 'idle' };
         }
         return {
+            assets: active.assets,
             invite: active.invite,
             network: active.mesh.network(),
             notices: [...active.notices],
@@ -110,6 +119,16 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         });
     }
 
+    /** Report assets still arriving from peers. */
+    setAssetProgress(progress: SessionAssetProgress): void {
+        const active = this.active;
+        if (!active) {
+            return;
+        }
+        active.assets = { ...progress };
+        this.emitState();
+    }
+
     private serialise<T>(task: () => Promise<T>): Promise<T> {
         const run = this.transition.then(task, task);
         this.transition = run.catch(() => undefined);
@@ -135,6 +154,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
             `[session] ${role === 'host' ? 'hosting' : 'joining'} as ${mesh.localId.slice(0, 8)} on build ${this.options.compat}`,
         );
         const active: Active = {
+            assets: NO_ASSETS,
             invite: formatInvite(secret),
             mesh,
             notices: [],

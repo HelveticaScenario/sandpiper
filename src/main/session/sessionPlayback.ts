@@ -51,8 +51,11 @@ export interface PlaybackHost {
     setSessionClock: (config: SessionClockConfig | null) => void;
     /** Tempo and meter the engine plays now, for a new session's timeline. */
     currentMeter: () => { bpm: number; barBeats: number };
-    /** Build the patch from a peer's source and play it on `atBar`. */
-    playRemote: (evaluation: SessionEval) => void;
+    /**
+     * Build the patch from a peer's source and play it on `atBar`; false if
+     * it could not be built here (an asset still arriving, say).
+     */
+    playRemote: (evaluation: SessionEval) => boolean;
 }
 
 /** Plan for playing a local evaluation of a shared file to the session. */
@@ -108,6 +111,8 @@ export class SessionPlayback {
     /** A peer's evaluation waiting for this peer to sync its clock. */
     private waitingEval: SessionEval | null = null;
     private lastPlayedEvalId: string | null = null;
+    /** The latest peer evaluation, if it failed to build here. */
+    private failedEval: SessionEval | null = null;
     private disposed = false;
     private readonly observer = (event: Y.YMapEvent<unknown>) => {
         if (event.keysChanged.has('reference')) {
@@ -333,15 +338,39 @@ export class SessionPlayback {
         // Building a patch can take a while; it runs after the document
         // transaction that delivered it has finished.
         setImmediate(() => {
-            if (this.disposed) {
-                return;
-            }
-            try {
-                this.host.playRemote(evaluation);
-            } catch (error) {
-                console.warn('[session] could not play a peer evaluation', error);
+            if (!this.disposed) {
+                this.attempt(evaluation);
             }
         });
+    }
+
+    /**
+     * Try the latest peer evaluation again if it failed here, once whatever
+     * it was missing may have arrived. It plays on the next bar, counting
+     * bars from its song's start as everyone else does.
+     */
+    retryFailed(): void {
+        const failed = this.failedEval;
+        const current = this.map.get('current');
+        if (
+            !failed ||
+            this.disposed ||
+            !isSessionEval(current) ||
+            current.id !== failed.id
+        ) {
+            return;
+        }
+        this.attempt(failed);
+    }
+
+    private attempt(evaluation: SessionEval): void {
+        let played = false;
+        try {
+            played = this.host.playRemote(evaluation);
+        } catch (error) {
+            console.warn('[session] could not play a peer evaluation', error);
+        }
+        this.failedEval = played ? null : evaluation;
     }
 }
 
