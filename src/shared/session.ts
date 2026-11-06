@@ -17,6 +17,13 @@ export interface SessionNotice {
 
 export type SessionRole = 'host' | 'guest';
 
+/** Asset files still arriving from peers. */
+export interface SessionAssetProgress {
+    pending: number;
+    receivedBytes: number;
+    totalBytes: number;
+}
+
 export type SessionState =
     | { status: 'idle' }
     | {
@@ -28,6 +35,7 @@ export type SessionState =
           peers: SessionPeer[];
           notices: SessionNotice[];
           network: SessionNetwork;
+          assets: SessionAssetProgress;
       };
 
 /**

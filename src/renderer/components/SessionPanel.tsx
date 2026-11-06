@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { SessionPeer, SessionState } from '../../shared/session';
+import type {
+    SessionAssetProgress,
+    SessionPeer,
+    SessionState,
+} from '../../shared/session';
 import electronAPI from '../electronAPI';
 import { connectionHint, natLabel } from '../session/connectionHint';
 import { ipcErrorMessage } from '../hooks/useSessionState';
@@ -11,6 +15,16 @@ interface SessionPanelProps {
     state: SessionState;
     /** Runs before starting a session, e.g. to save open files it will share. */
     onBeforeStart: () => Promise<void>;
+}
+
+/** "Receiving 3 files… 40%" while peers' assets arrive. */
+export function assetSummary(assets: SessionAssetProgress): string {
+    const files = assets.pending === 1 ? '1 file' : `${assets.pending} files`;
+    const percent =
+        assets.totalBytes > 0
+            ? ` ${Math.floor((assets.receivedBytes / assets.totalBytes) * 100)}%`
+            : '';
+    return `Receiving ${files}…${percent}`;
 }
 
 function PeerRow({ peer, isSelf }: { peer: SessionPeer; isSelf: boolean }) {
@@ -128,9 +142,7 @@ export function SessionPanel({
                             >
                                 Start a session
                             </button>
-                            <div className="session-divider">
-                                or join one
-                            </div>
+                            <div className="session-divider">or join one</div>
                             <form
                                 className="session-join"
                                 onSubmit={(e) => {
@@ -196,10 +208,17 @@ export function SessionPanel({
                                     </>
                                 )}
                             </div>
+                            {state.assets.pending > 0 && (
+                                <p className="session-hint">
+                                    {assetSummary(state.assets)}
+                                </p>
+                            )}
                             {state.notices.length > 0 && (
                                 <ul className="session-notices">
                                     {state.notices.map((notice) => (
-                                        <li key={notice.id}>{notice.message}</li>
+                                        <li key={notice.id}>
+                                            {notice.message}
+                                        </li>
                                     ))}
                                 </ul>
                             )}
@@ -293,6 +312,9 @@ export function SessionButton({
                 />
             ))}
             <span>{people.length === 1 ? 'Waiting…' : `${people.length}`}</span>
+            {state.assets.pending > 0 && (
+                <span title={assetSummary(state.assets)}>⇣</span>
+            )}
         </button>
     );
 }

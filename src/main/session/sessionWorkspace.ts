@@ -1,10 +1,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { BlobStore } from './blobStore';
+import { BlobTransfer, type TransferProgress } from './blobTransfer';
 import type { ActiveSession } from './sessionManager';
 import { type RendererSink, SharedDoc } from './sharedDoc';
 import { WorkspaceMirror, type WorkspaceMirrorOptions } from './workspaceMirror';
 
-export interface SessionWorkspaceHost extends WorkspaceMirrorOptions {
+export interface SessionWorkspaceHost
+    extends Omit<WorkspaceMirrorOptions, 'blobs'> {
+    /** Where assets received from peers are kept, across sessions. */
+    blobDir: string;
+    /** Assets still to arrive from peers changed. */
+    onAssetProgress: (progress: TransferProgress) => void;
+    /** A peer's asset arrived on disk. */
+    onAssetArrived: () => void;
     /** The open workspace folder, if any. */
     getWorkspaceRoot: () => string | null;
     /** Make `root` the open workspace. */
@@ -37,6 +46,7 @@ export function createSessionFolder(sessionsDir: string, peerId: string): string
 export class SessionWorkspace {
     readonly shared: SharedDoc;
     readonly mirror: WorkspaceMirror;
+    private readonly transfer: BlobTransfer;
     private readonly host: SessionWorkspaceHost;
     private rendererConnected = false;
 
@@ -46,7 +56,16 @@ export class SessionWorkspace {
         const open = host.getWorkspaceRoot();
         const seed = session.role === 'host' && open !== null;
         const root = seed ? open : createSessionFolder(host.sessionsDir, session.self.id);
-        this.mirror = new WorkspaceMirror(this.shared.doc, root, host);
+        const store = new BlobStore(host.blobDir);
+        this.transfer = new BlobTransfer(session.mesh, store, host.onAssetProgress);
+        this.mirror = new WorkspaceMirror(this.shared.doc, root, {
+            ...host,
+            blobs: {
+                fetch: (hash, size) => this.transfer.fetch(hash, size),
+                onArrived: host.onAssetArrived,
+                store,
+            },
+        });
         this.mirror.start({ seed });
         if (root !== open) {
             host.switchWorkspace(root);
@@ -70,6 +89,7 @@ export class SessionWorkspace {
             console.warn('[session] final workspace write failed', error);
         }
         this.mirror.dispose();
+        this.transfer.stop();
         this.shared.destroy();
     }
 }

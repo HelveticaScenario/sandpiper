@@ -215,6 +215,35 @@ export class PeerMesh extends EventEmitter<PeerMeshEvents> {
         return true;
     }
 
+    /**
+     * Send bytes and resolve once the connection can take more, so bulk
+     * transfers do not buffer without bound. Resolves false if the peer is
+     * not (or no longer) connected.
+     */
+    async sendPaced(
+        peerId: string,
+        channel: ChannelId,
+        payload: Uint8Array,
+    ): Promise<boolean> {
+        const connection = this.open.get(peerId);
+        if (!connection) {
+            return false;
+        }
+        if (connection.socket.write(encodeFrame(channel, payload))) {
+            return true;
+        }
+        await new Promise<void>((resolve) => {
+            const done = () => {
+                connection.socket.off('drain', done);
+                connection.socket.off('close', done);
+                resolve();
+            };
+            connection.socket.on('drain', done);
+            connection.socket.on('close', done);
+        });
+        return this.open.get(peerId) === connection;
+    }
+
     /** Send a JSON message to one directly connected peer. */
     sendDirect(peerId: string, body: unknown): boolean {
         return this.sendControl(peerId, { t: 'direct', body });

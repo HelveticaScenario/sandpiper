@@ -47,6 +47,8 @@ interface FakePeer {
     configs: Array<SessionClockConfig | null>;
     played: SessionEval[];
     self: SessionPeer;
+    /** Whether the fake engine manages to build the next remote patch. */
+    builds: { ok: boolean };
 }
 
 function peer(
@@ -58,14 +60,18 @@ function peer(
     const shared = new SharedDoc(mesh);
     const configs: Array<SessionClockConfig | null> = [];
     const played: SessionEval[] = [];
+    const builds = { ok: true };
     const self = { color: '#123456', id: mesh.localId, name };
     const playback = new SessionPlayback(shared.doc, mesh, self, role, {
         currentMeter: () => ({ barBeats: 4, bpm: 120 }),
         hostMicros: () => Number(process.hrtime.bigint() / 1000n) + skewMicros,
-        playRemote: (evaluation) => played.push(evaluation),
+        playRemote: (evaluation) => {
+            played.push(evaluation);
+            return builds.ok;
+        },
         setSessionClock: (config) => configs.push(config),
     });
-    const fake = { configs, mesh, playback, played, self, shared };
+    const fake = { builds, configs, mesh, playback, played, self, shared };
     cleanup.push(async () => {
         playback.dispose();
         shared.destroy();
@@ -213,6 +219,33 @@ describe('SessionPlayback', () => {
         expect(barAfter).toBeGreaterThan(barBefore);
         expect(barAfter - barBefore).toBeLessThan(10);
     }, 30_000);
+});
+
+describe('SessionPlayback retries', () => {
+    it('retries a peer evaluation that failed to build once assets arrive', async () => {
+        const session = newTestSession();
+        const host = peer(makeMesh(testnet, session), 'host', 0, 'Ada');
+        const guest = peer(makeMesh(testnet, session), 'guest', 0, 'Bo');
+        await Promise.all([host.mesh.start(), guest.mesh.start()]);
+        await waitFor(() => guest.playback.currentBar() !== null);
+        guest.builds.ok = false;
+        const plan = host.playback.planLocal('f')!;
+        host.playback.publishLocal(plan, 'needs kick.wav', patchWith({}));
+        await waitFor(() => guest.played.length === 1);
+        // Nothing to retry while it keeps failing...
+        guest.playback.retryFailed();
+        expect(guest.played).toHaveLength(2);
+        // ...and it stops once it builds.
+        guest.builds.ok = true;
+        guest.playback.retryFailed();
+        expect(guest.played).toHaveLength(3);
+        guest.playback.retryFailed();
+        expect(guest.played).toHaveLength(3);
+        expect(guest.played[2]).toMatchObject({
+            atBar: plan.atBar,
+            originBar: plan.originBar,
+        });
+    });
 });
 
 describe('meterChange', () => {

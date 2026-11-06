@@ -975,9 +975,18 @@ sessionController.manager.on('started', (session) => {
             isStampablePath(relativePath)
                 ? stripPatchVersionStamp(content)
                 : content,
+        blobDir: path.join(app.getPath('userData'), 'session-assets'),
         getWorkspaceRoot: () => currentWorkspaceRoot,
-        onTreeChanged: () =>
-            sendToMainWindow(IPC_CHANNELS.FS_ON_TREE_CHANGED),
+        onAssetArrived: () => sessionPlayback?.retryFailed(),
+        onAssetProgress: (progress) =>
+            sessionController.manager.setAssetProgress(progress),
+        onTreeChanged: () => {
+            // A session can create wavs/ after the workspace opened.
+            if (!wavsWatcher && currentWorkspaceRoot) {
+                startWavsWatcher(currentWorkspaceRoot);
+            }
+            sendToMainWindow(IPC_CHANNELS.FS_ON_TREE_CHANGED);
+        },
         renderer: {
             awarenessUpdate: (update) =>
                 sendToMainWindow(
@@ -1009,7 +1018,7 @@ sessionController.manager.on('started', (session) => {
                 };
             },
             hostMicros: () => sessionClockMicros(),
-            playRemote: (evaluation: SessionEval) => {
+            playRemote: (evaluation: SessionEval): boolean => {
                 const result = runPatchScript(
                     evaluation.source,
                     sessionSourceId(evaluation.fileId),
@@ -1023,6 +1032,7 @@ sessionController.manager.on('started', (session) => {
                     filePath: workspace.mirror.pathOf(evaluation.fileId),
                     result,
                 });
+                return result.success;
             },
             setSessionClock: (config) => synth.setSessionClock(config),
         },
