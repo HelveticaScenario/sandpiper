@@ -12,21 +12,23 @@ import {
 import { WorkspaceMirror } from '../workspaceMirror';
 import { sleep, waitFor } from './meshTestUtils';
 
+type WatchListener = (event: fs.WatchEventType, filename: string | Buffer | null) => void;
+
 /** Disk events the workspace watcher drops, as a lagging watcher would. */
 let dropDiskEvent: (filename: string) => boolean = () => false;
+/** The listener of the most recently started workspace watcher. */
+let lastWatchListener: WatchListener | null = null;
 
 vi.mock('fs', async (importOriginal) => {
     const actual = await importOriginal<typeof import('fs')>();
-    const watch = (
-        target: string,
-        options: fs.WatchOptions,
-        listener: (event: fs.WatchEventType, filename: string | Buffer | null) => void,
-    ) =>
-        actual.watch(target, options, (event, filename) => {
+    const watch = (target: string, options: fs.WatchOptions, listener: WatchListener) => {
+        lastWatchListener = listener;
+        return actual.watch(target, options, (event, filename) => {
             if (!filename || !dropDiskEvent(filename.toString())) {
                 listener(event, filename);
             }
         });
+    };
     return { ...actual, watch };
 });
 
@@ -300,8 +302,7 @@ describe('WorkspaceMirror disk changes', () => {
         await sleep(400);
         dropDiskEvent = (filename) => filename.endsWith('kick.js');
         fs.rmSync(path.join(root, 'drums/kick.js'));
-        const now = new Date();
-        fs.utimesSync(path.join(root, 'drums'), now, now);
+        lastWatchListener!('rename', 'drums');
         await waitFor(
             () => !listEntries(doc).some((e) => e.path === 'drums/kick.js'),
             5000,
