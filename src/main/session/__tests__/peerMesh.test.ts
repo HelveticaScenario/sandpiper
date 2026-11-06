@@ -252,6 +252,19 @@ describe('PeerMesh', () => {
         expect(atB).toHaveLength(2);
     });
 
+    it('reports peers it found and why it could not reach them', async () => {
+        const session = newTestSession();
+        const a = track(makeMesh(testnet, session, { firewall: () => true }));
+        const b = track(makeMesh(testnet, session));
+        const updates: number[] = [];
+        b.on('network', (network) => updates.push(network.found));
+        await startAll(a, b);
+        await waitFor(() => b.network().lastError !== null, 20_000);
+        expect(b.network().found).toBe(1);
+        expect(b.peers()).toEqual([]);
+        expect(updates.length).toBeGreaterThan(0);
+    });
+
     it('delivers each gossip message once in a full mesh', async () => {
         const session = newTestSession();
         const meshes = Array.from({ length: 4 }, () =>

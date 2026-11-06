@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { SessionPeer, SessionState } from '../../shared/session';
 import electronAPI from '../electronAPI';
+import { connectionHint, natLabel } from '../session/connectionHint';
 import { ipcErrorMessage } from '../hooks/useSessionState';
 import './SessionPanel.css';
 
@@ -172,10 +173,17 @@ export function SessionPanel({ isOpen, onClose, state }: SessionPanelProps) {
                                     ))}
                                 </ul>
                                 {state.peers.length === 0 && (
-                                    <p className="session-hint">
-                                        Waiting for others to join. Send them
-                                        the invite link.
-                                    </p>
+                                    <>
+                                        <p className="session-hint">
+                                            {connectionHint(
+                                                state.role,
+                                                state.network,
+                                            )}
+                                        </p>
+                                        <p className="session-hint">
+                                            {natLabel(state.network.nat)}
+                                        </p>
+                                    </>
                                 )}
                             </div>
                             {state.notices.length > 0 && (

@@ -66,6 +66,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         }
         return {
             invite: active.invite,
+            network: active.mesh.network(),
             notices: [...active.notices],
             peers: active.mesh.peers(),
             role: active.role,
@@ -130,6 +131,9 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
             secret,
             topic: sessionTopic(secret),
         });
+        console.info(
+            `[session] ${role === 'host' ? 'hosting' : 'joining'} as ${mesh.localId.slice(0, 8)} on build ${this.options.compat}`,
+        );
         const active: Active = {
             invite: formatInvite(secret),
             mesh,
@@ -140,6 +144,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         mesh.on('peer-open', () => this.emitStateFor(active));
         mesh.on('peer-close', () => this.emitStateFor(active));
         mesh.on('rejected', (rejection) => this.noteRejection(active, rejection));
+        mesh.on('network', () => this.emitStateFor(active));
         try {
             await mesh.start();
         } catch (error) {

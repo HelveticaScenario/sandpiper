@@ -23,10 +23,27 @@ declare module 'hyperswarm' {
         maxPeers?: number;
     }
 
+    export interface HyperDHTConnection extends EventEmitter {
+        on(event: 'error', listener: (error: Error & { code?: string }) => void): this;
+    }
+
+    export interface HyperDHT extends EventEmitter {
+        readonly firewalled: boolean;
+        readonly host: string | null;
+        readonly port: number;
+        readonly randomized: boolean;
+        connect(publicKey: Buffer, options?: unknown): HyperDHTConnection;
+        on(event: 'nat-update', listener: () => void): this;
+    }
+
     export default class Hyperswarm extends EventEmitter {
         constructor(options?: HyperswarmOptions);
         readonly keyPair: { publicKey: Buffer; secretKey: Buffer };
         readonly connections: Set<NoiseSecretStream>;
+        readonly dht: HyperDHT;
+        /** Peers discovered on joined topics, keyed by hex public key. */
+        readonly peers: Map<string, PeerInfo>;
+        readonly connecting: number;
         join(
             topic: Buffer,
             options?: { server?: boolean; client?: boolean },
@@ -38,6 +55,7 @@ declare module 'hyperswarm' {
             event: 'connection',
             listener: (socket: NoiseSecretStream, info: PeerInfo) => void,
         ): this;
+        on(event: 'update', listener: () => void): this;
     }
 }
 

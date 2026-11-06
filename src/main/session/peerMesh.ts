@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import Hyperswarm, { type NoiseSecretStream } from 'hyperswarm';
 import { Channel, type ChannelId, FrameDecoder, encodeFrame } from './frames';
 import { authProof, verifyAuthProof } from './invite';
+import type { SessionNetwork } from '../../shared/session';
 
 /**
  * Bumped whenever the wire format changes incompatibly. Peers on different
@@ -84,6 +85,8 @@ export interface PeerMeshEvents {
     direct: [fromPeerId: string, body: unknown];
     data: [fromPeerId: string, channel: ChannelId, payload: Buffer];
     rejected: [rejection: MeshRejection];
+    /** Discovery, connection attempts or the NAT type changed. */
+    network: [network: SessionNetwork];
 }
 
 /**
@@ -99,6 +102,9 @@ export class PeerMesh extends EventEmitter<PeerMeshEvents> {
     private readonly banned = new Set<string>();
     private readonly seenGossip = new Map<string, number>();
     private stopped = false;
+    private lastConnectError: string | null = null;
+    private lastNetwork = '';
+    private lastNat: SessionNetwork['nat'] | null = null;
 
     constructor(options: PeerMeshOptions) {
         super();
@@ -111,6 +117,25 @@ export class PeerMesh extends EventEmitter<PeerMeshEvents> {
         });
         this.localId = this.swarm.keyPair.publicKey.toString('hex');
         this.swarm.on('connection', (socket) => this.handleConnection(socket));
+        this.watchNetwork();
+    }
+
+    network(): SessionNetwork {
+        const dht = this.swarm.dht;
+        let nat: SessionNetwork['nat'] = 'checking';
+        if (!dht.firewalled) {
+            nat = 'open';
+        } else if (dht.randomized) {
+            nat = 'randomized';
+        } else if (dht.host !== null) {
+            nat = 'consistent';
+        }
+        return {
+            connecting: this.swarm.connecting,
+            found: this.swarm.peers.size,
+            lastError: this.lastConnectError,
+            nat,
+        };
     }
 
     /** Announce on the topic and resolve once the announcement is flushed. */
@@ -131,6 +156,45 @@ export class PeerMesh extends EventEmitter<PeerMeshEvents> {
             this.emit('peer-close', id);
         }
         await this.swarm.destroy();
+    }
+
+    /**
+     * Report network changes, and record why outgoing connections fail:
+     * Hyperswarm retries them without surfacing the error.
+     */
+    private watchNetwork(): void {
+        const dht = this.swarm.dht;
+        const connect = dht.connect.bind(dht);
+        dht.connect = (publicKey, options) => {
+            const connection = connect(publicKey, options);
+            connection.on('error', (error) => {
+                this.lastConnectError = error.code ?? error.message;
+                console.info(
+                    `[session] connecting to ${publicKey.toString('hex').slice(0, 8)} failed: ${this.lastConnectError}`,
+                );
+                this.reportNetwork();
+            });
+            return connection;
+        };
+        this.swarm.on('update', () => this.reportNetwork());
+        dht.on('nat-update', () => this.reportNetwork());
+    }
+
+    private reportNetwork(): void {
+        if (this.stopped) {
+            return;
+        }
+        const network = this.network();
+        const key = JSON.stringify(network);
+        if (key === this.lastNetwork) {
+            return;
+        }
+        if (network.nat !== this.lastNat) {
+            this.lastNat = network.nat;
+            console.info(`[session] network: ${network.nat}`);
+        }
+        this.lastNetwork = key;
+        this.emit('network', network);
     }
 
     peers(): MeshPeer[] {

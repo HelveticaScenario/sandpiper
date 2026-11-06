@@ -27,7 +27,26 @@ export type SessionState =
           /** Peers with an open, authenticated connection to this one. */
           peers: SessionPeer[];
           notices: SessionNotice[];
+          network: SessionNetwork;
       };
+
+/**
+ * How this peer's network looks to the DHT. A randomized NAT changes its
+ * public port per destination, so it can connect only to peers whose
+ * networks are easier to reach.
+ */
+export type SessionNat = 'checking' | 'open' | 'consistent' | 'randomized';
+
+/** Progress of finding and reaching the other peers in a session. */
+export interface SessionNetwork {
+    nat: SessionNat;
+    /** Other peers the DHT has returned for this session. */
+    found: number;
+    /** Connection attempts in progress. */
+    connecting: number;
+    /** HyperDHT error code of the latest failed connection attempt. */
+    lastError: string | null;
+}
 
 /** Cursor and avatar colors handed out to peers; all readable on dark themes. */
 export const SESSION_PEER_COLORS = [
