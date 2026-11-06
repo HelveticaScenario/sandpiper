@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
     createDirEntry,
@@ -12,11 +12,30 @@ import {
 import { WorkspaceMirror } from '../workspaceMirror';
 import { sleep, waitFor } from './meshTestUtils';
 
+/** Disk events the workspace watcher drops, as a lagging watcher would. */
+let dropDiskEvent: (filename: string) => boolean = () => false;
+
+vi.mock('fs', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('fs')>();
+    const watch = (
+        target: string,
+        options: fs.WatchOptions,
+        listener: (event: fs.WatchEventType, filename: string | Buffer | null) => void,
+    ) =>
+        actual.watch(target, options, (event, filename) => {
+            if (!filename || !dropDiskEvent(filename.toString())) {
+                listener(event, filename);
+            }
+        });
+    return { ...actual, watch };
+});
+
 const STAMP = '/* stamp */\n';
 const mirrors: WorkspaceMirror[] = [];
 const dirs: string[] = [];
 
 afterEach(() => {
+    dropDiskEvent = () => false;
     for (const mirror of mirrors.splice(0)) {
         mirror.dispose();
     }
@@ -270,6 +289,23 @@ describe('WorkspaceMirror disk changes', () => {
             5000,
         );
         expect(textAt(doc, 'new.js').toJSON()).toBe('n');
+    });
+
+    it('removes a deleted file when the watcher reports only its folder', async () => {
+        const doc = new Y.Doc();
+        const root = tempDir();
+        write(root, 'drums/kick.js', 'k');
+        startMirror(doc, root, true);
+        // Let the events from writing the file settle first.
+        await sleep(400);
+        dropDiskEvent = (filename) => filename.endsWith('kick.js');
+        fs.rmSync(path.join(root, 'drums/kick.js'));
+        const now = new Date();
+        fs.utimesSync(path.join(root, 'drums'), now, now);
+        await waitFor(
+            () => !listEntries(doc).some((e) => e.path === 'drums/kick.js'),
+            5000,
+        );
     });
 
     it('does not echo its own writes back into the document', async () => {

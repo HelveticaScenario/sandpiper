@@ -505,6 +505,17 @@ export class WorkspaceMirror {
             return;
         }
         if (stat.isDirectory()) {
+            // The Linux watcher can miss a file removed just after its folder
+            // appeared; the folder's own event still reports that removal.
+            for (const mirrored of [...this.mirrored.values()]) {
+                if (
+                    mirrored.kind !== 'dir' &&
+                    mirrored.path.startsWith(`${rel}/`) &&
+                    !fs.existsSync(this.absolute(mirrored.path))
+                ) {
+                    this.checkDisk(mirrored.path);
+                }
+            }
             const covered = listEntries(this.doc).some((e) => isAtOrUnder(e.path, rel));
             if (!covered && isEmptyDir(absolute)) {
                 this.doc.transact(() => createDirEntry(this.doc, rel), MIRROR_ORIGIN);
