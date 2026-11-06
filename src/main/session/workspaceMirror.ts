@@ -178,12 +178,14 @@ export class WorkspaceMirror {
         if (moving.length === 0) {
             return false;
         }
-        // A rename that only changes case is the same directory entry on a
-        // case-insensitive disk; renaming it through a temporary name gives
-        // the folder its new spelling there.
-        const caseOnly =
-            from !== to && from.toLowerCase() === to.toLowerCase();
-        if (caseOnly && fs.existsSync(fromAbsolute)) {
+        // On a case-insensitive disk a rename that only changes case names
+        // the same directory entry; renaming it through a temporary name
+        // gives the folder its new spelling there.
+        const sameEntry =
+            from !== to &&
+            from.toLowerCase() === to.toLowerCase() &&
+            isSameEntry(fromAbsolute, toAbsolute);
+        if (sameEntry) {
             const temp = path.join(
                 path.dirname(fromAbsolute),
                 `.shoreline-rename-${Date.now()}`,
@@ -199,7 +201,7 @@ export class WorkspaceMirror {
         }, MIRROR_ORIGIN);
         this.reconcileNow();
         // Unshared files under a moved folder follow it on disk.
-        if (!caseOnly && fs.existsSync(fromAbsolute)) {
+        if (!sameEntry && fs.existsSync(fromAbsolute)) {
             fs.mkdirSync(path.dirname(toAbsolute), { recursive: true });
             mergeMove(fromAbsolute, toAbsolute);
         }
@@ -643,6 +645,16 @@ function isEmptyDir(absolute: string): boolean {
 }
 
 /** Move `from` onto `to`, merging into an existing directory there. */
+function isSameEntry(a: string, b: string): boolean {
+    try {
+        const sa = fs.statSync(a);
+        const sb = fs.statSync(b);
+        return sa.dev === sb.dev && sa.ino === sb.ino;
+    } catch {
+        return false;
+    }
+}
+
 function mergeMove(from: string, to: string): void {
     if (!fs.existsSync(to)) {
         fs.renameSync(from, to);
