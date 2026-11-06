@@ -196,14 +196,19 @@ pub fn block_render_ceiling() -> usize {
 /// Per-sample external clock state injected into ROOT_CLOCK by the audio callback.
 ///
 /// The callback pre-computes one entry per sample in the block by querying the
-/// Link timeline. The ROOT_CLOCK wrapper injects the appropriate entry before
-/// calling inner `Clock::update()` for each sample position.
+/// external timeline (Ableton Link or the session clock). The ROOT_CLOCK
+/// wrapper injects the appropriate entry before calling inner
+/// `Clock::update()` for each sample position.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ExternalClockState {
     /// Bar phase in [0, 1).
     pub bar_phase: f64,
     /// Tempo in BPM.
     pub bpm: f64,
+    /// Completed bar count shared with other peers. When present the clock
+    /// reports it as its bar (loop) index; when absent the clock counts bar
+    /// wraps locally.
+    pub bar_index: Option<u64>,
 }
 
 pub trait Sampleable: MessageHandler + Send {

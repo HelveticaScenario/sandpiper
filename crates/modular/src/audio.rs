@@ -1479,6 +1479,7 @@ impl AudioState {
 
     /// Build a PatchUpdate from desired graph and send to audio thread.
     /// This computes the diff using the shadow state and constructs new modules on the main thread.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_patch(
         &self,
         desired_graph: PatchGraph,
@@ -1488,6 +1489,8 @@ impl AudioState {
         wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
         transport_meta: Option<TransportMeta>,
         reset_clock: bool,
+        at_bar: Option<i64>,
+        origin_bar: Option<i64>,
     ) -> Result<()> {
         let PatchGraph {
             modules,
@@ -1692,6 +1695,8 @@ impl AudioState {
 
         // Restart the transport when applying this update (set on a buffer switch)
         update.reset_clock = reset_clock;
+        update.at_bar = at_bar;
+        update.origin_bar = origin_bar;
 
         // Add-only: the audio thread must write only into pre-existing slots, so a
         // dropped module's removal is deferred until its swap lands. Promote any
@@ -1710,6 +1715,7 @@ impl AudioState {
         self.send_command(GraphCommand::QueuedPatchUpdate { update, trigger })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn handle_set_patch(
         &self,
         patch_graph: PatchGraph,
@@ -1719,6 +1725,8 @@ impl AudioState {
         wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
         transport_meta: Option<TransportMeta>,
         reset_clock: bool,
+        at_bar: Option<i64>,
+        origin_bar: Option<i64>,
     ) -> Vec<ApplyPatchError> {
         // Validate patch
         let schemas = schema();
@@ -1739,7 +1747,14 @@ impl AudioState {
             });
             self.scope_collection.lock().clear();
             self.vu_collection.lock().clear();
-            self.request_start();
+            // An `at_bar` update starts the transport on that bar, so peers
+            // starting from stopped share the song's origin bar.
+            match at_bar {
+                Some(bar) => {
+                    let _ = self.send_command(GraphCommand::StartAtBar(bar));
+                }
+                None => self.request_start(),
+            }
         }
 
         // Apply patch
@@ -1751,6 +1766,8 @@ impl AudioState {
             wav_data,
             transport_meta,
             reset_clock,
+            at_bar,
+            origin_bar,
         ) {
             return vec![ApplyPatchError {
                 message: format!("Failed to apply patch: {}", e),
@@ -1875,6 +1892,13 @@ struct AudioProcessor {
     /// Ableton Link integration (audio-thread side). Owns the live
     /// `rusty_link` resources when active and exposes only RT-safe operations.
     link: crate::link::LinkState,
+    /// Session clock (audio-thread side). Takes precedence over Link wherever
+    /// the external timeline is consulted.
+    session: crate::session_clock::SessionClockState,
+    /// Session bar the queued `at_bar` update applies at, resolved on its
+    /// first scan: the update's own bar, or the next bar when that boundary
+    /// had already passed. `None` until resolved.
+    queued_session_target: Option<i64>,
     /// Shared per-module profile snapshot — flushed at end of each callback.
     module_profile_collection: ModuleProfileCollection,
     /// Profiler shared-map seed whose swap lost the `try_lock` race with the
@@ -1925,6 +1949,8 @@ impl AudioProcessor {
             block_pos: block_size,
             input_block_scratch: vec![[0.0f32; PORT_MAX_CHANNELS]; block_size],
             link: crate::link::LinkState::new(),
+            session: crate::session_clock::SessionClockState::new(),
+            queued_session_target: None,
             module_profile_collection: shared.module_profile_collection,
             pending_profile_shared_seed: None,
             midi_scratch: Vec::with_capacity(crate::midi::MIDI_BUFFER_SIZE),
@@ -1998,12 +2024,19 @@ impl AudioProcessor {
                     // immediately. This is intentional: when the user triggers a second
                     // update before the first one fires (e.g. pressing Ctrl+Enter twice),
                     // we treat it as "apply now" rather than re-queuing for the next
-                    // bar/beat.
+                    // bar/beat. An `at_bar` update targets a bar every peer agreed on, so
+                    // it replaces the queued one and keeps its own target.
+                    self.queued_session_target = None;
                     if let Some((old_update, _)) = self.queued_update.take() {
                         // The superseding update's `reset_clock` is already relative to the
                         // patch that is playing, so the discarded update's flag is dropped.
                         self.try_push_garbage_item(GarbageItem::PatchUpdate(old_update));
-                        self.queued_update = Some((update, QueuedTrigger::Immediate));
+                        let trigger = if update.at_bar.is_some() {
+                            trigger
+                        } else {
+                            QueuedTrigger::Immediate
+                        };
+                        self.queued_update = Some((update, trigger));
                     } else {
                         self.queued_update = Some((update, trigger));
                     }
@@ -2055,29 +2088,26 @@ impl AudioProcessor {
                             .push(AudioError::MessageDispatchFailed { message: e });
                     }
                 }
-                GraphCommand::Start => {
-                    if self.link.is_active() {
-                        // With Link: keep `stopped=true` and arm a pending start.
-                        // The buffer-level phase check releases `stopped` when the
-                        // shared Link timeline reaches a bar boundary.
-                        self.stopped
-                            .store(true, std::sync::atomic::Ordering::SeqCst);
-                        self.link.request_quantized_start();
-                    } else {
-                        // Free-run: flip immediately and reset the clock.
-                        self.stopped
-                            .store(false, std::sync::atomic::Ordering::SeqCst);
-                        let _ = self
-                            .patch
-                            .dispatch_message(&Message::Clock(ClockMessages::Start));
-                    }
+                // Under the session clock a start keeps `stopped=true` until the
+                // timeline reaches the start bar; the buffer-level check releases it.
+                GraphCommand::StartAtBar(bar) if self.session.is_active() => {
+                    self.stopped
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.session.request_start_at_bar(bar);
                 }
+                GraphCommand::Start if self.session.is_active() => {
+                    self.stopped
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.session.request_start_next_bar();
+                }
+                GraphCommand::Start | GraphCommand::StartAtBar(_) => self.start_transport(),
                 GraphCommand::Stop => {
                     // Stop is handled via the stopped flag.
                     // Also clear any pending start so a later peer-start does not
                     // resurrect a cancelled patch, and propagate stop to peers.
                     self.link.clear_pending_start();
                     self.link.signal_stop();
+                    self.session.clear_pending_start();
                 }
                 GraphCommand::ClearPatch { mut fresh_patch } => {
                     // Discard any pending queued update
@@ -2118,7 +2148,44 @@ impl AudioProcessor {
                         }
                     }
                 }
+                GraphCommand::SetSessionClock(update) => {
+                    let was_active = self.session.is_active();
+                    let deactivating = update.is_none();
+                    let start_armed = self.session.pending_start_armed();
+                    if let Some(filter) = self.session.configure(update) {
+                        self.try_push_garbage_item(GarbageItem::HostTimeFilter(filter));
+                    }
+                    if was_active && deactivating {
+                        use modular_core::types::ROOT_CLOCK_ID;
+                        if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+                            root_clock.clear_external_sync();
+                        }
+                        // A start still waiting on the session timeline starts on
+                        // the remaining clock source.
+                        if start_armed {
+                            self.start_transport();
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    /// Start the transport without the session clock: at the next Link bar
+    /// boundary when Link is active, otherwise immediately.
+    fn start_transport(&mut self) {
+        if self.link.is_active() {
+            // With Link: keep `stopped=true` and arm a pending start.
+            // The buffer-level phase check releases `stopped` when the
+            // shared Link timeline reaches a bar boundary.
+            self.stopped.store(true, Ordering::SeqCst);
+            self.link.request_quantized_start();
+        } else {
+            // Free-run: flip immediately and reset the clock.
+            self.stopped.store(false, Ordering::SeqCst);
+            let _ = self
+                .patch
+                .dispatch_message(&Message::Clock(ClockMessages::Start));
         }
     }
 
@@ -2133,7 +2200,19 @@ impl AudioProcessor {
     /// maps — is stowed back into the consumed `update` (the "husk") and
     /// shipped to the garbage queue in a single push at the end, so applying a
     /// patch neither allocates nor deallocates on the audio thread.
-    fn apply_patch_update(&mut self, mut update: PatchUpdate, swap_pos: usize) {
+    #[cfg(test)]
+    fn apply_patch_update(&mut self, update: PatchUpdate, swap_pos: usize) {
+        self.apply_patch_update_at_frame(update, swap_pos, 0);
+    }
+
+    /// [`Self::apply_patch_update`] at cpal frame `cb_frame` of the current
+    /// callback, which places the swap on the session timeline.
+    fn apply_patch_update_at_frame(
+        &mut self,
+        mut update: PatchUpdate,
+        swap_pos: usize,
+        cb_frame: usize,
+    ) {
         // The new patch arrives fully constructed but unconnected. Bring it to liveness
         // without ever touching the live patch's map, then swap.
 
@@ -2219,12 +2298,34 @@ impl AudioProcessor {
             std::mem::swap(&mut *vu, &mut update.vu_next);
         }
 
+        // An explicit origin fixes the shared bar count directly.
+        if let Some(origin) = update.origin_bar
+            && self.session.is_active()
+        {
+            self.session.set_origin_bar(origin);
+        }
+
         // Restart the transport when this update switches playback to a different
         // buffer (song). Runs after the inserts/transfer/connect above so
         // ROOT_CLOCK's message listener is registered; the swap-site eager-fill
         // then refills the block.
         if update.reset_clock {
-            if self.link.is_active() {
+            if let Some(bar_position) = self.session.bar_position(cb_frame) {
+                // The session timeline owns the bar phase and the bar count runs
+                // from the origin bar, so every peer applying the same `at_bar`
+                // restarts the song's bar count on the same bar, even a peer that
+                // applied late. An explicit `origin_bar` wins; with neither the
+                // song starts at the swap's bar.
+                let origin = update
+                    .origin_bar
+                    .or(update.at_bar)
+                    .unwrap_or_else(|| crate::session_clock::split_bar(bar_position).1);
+                self.session.set_origin_bar(origin);
+                use modular_core::types::ROOT_CLOCK_ID;
+                if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+                    root_clock.reset_loop_index();
+                }
+            } else if self.link.is_active() {
                 // Under Ableton Link the shared session timeline owns the bar phase —
                 // a full Clock::Start would be re-overridden by the next synced sample
                 // and would spuriously re-fire the bar/beat triggers. The swap is
@@ -2244,14 +2345,18 @@ impl AudioProcessor {
             }
         }
 
-        // Apply tempo/time-sig now, atomically with the swap. The meter readout
-        // always reflects the patch that just applied; the Link push only happens
+        // Apply tempo/time-sig now, atomically with the swap. The meter's time
+        // signature always reflects the patch that just applied. Under the
+        // session clock the timeline owns the tempo, so nothing is pushed and the
+        // meter shows the timeline tempo. Otherwise the Link push only happens
         // when the DSL explicitly set the tempo, so a plain live-coding edit never
         // overrides a peer-driven Link tempo.
         if let Some(t) = &update.transport_meta {
             self.transport_meter
                 .write_tempo(t.tempo, t.numerator, t.denominator);
-            if t.tempo_set {
+            if let Some(bpm) = self.session.bpm() {
+                self.transport_meter.write_bpm(bpm);
+            } else if t.tempo_set {
                 self.link.set_tempo_now(t.tempo);
             }
         }
@@ -2337,8 +2442,105 @@ impl AudioProcessor {
         }
     }
 
+    /// Find the slot in `[block_pos, scan_end)` at which the queued update
+    /// swaps in, `written` being the cpal frame of `block_pos`. The quantized
+    /// scans fill ROOT_CLOCK as they go and stop at the trigger slot; an armed
+    /// Immediate update leaves the clock untouched (the post-swap refill fills
+    /// it under the new patch).
+    fn scan_queued_trigger(&mut self, scan_end: usize, written: usize) -> Option<usize> {
+        let at_bar = self.queued_update.as_ref()?.0.at_bar;
+        let from = self.block_pos;
+        if let Some(at_bar) = at_bar.filter(|_| self.session.is_active())
+            && let Some(target) = self.resolve_session_target(at_bar, written)
+        {
+            return self.fill_and_scan_session_bar(target, from, scan_end, written);
+        }
+        match &self.queued_update.as_ref()?.1 {
+            QueuedTrigger::Immediate => Some(from),
+            QueuedTrigger::NextBar => {
+                self.fill_and_scan_trigger("barTrigger", from, scan_end, written)
+            }
+            QueuedTrigger::NextBeat => {
+                self.fill_and_scan_trigger("beatTrigger", from, scan_end, written)
+            }
+        }
+    }
+
+    /// External transport state at cpal frame `cb_frame` of this callback: the
+    /// session clock when active, else Ableton Link, else `None`.
+    #[inline]
+    fn external_clock_at_frame(
+        &self,
+        cb_frame: usize,
+    ) -> Option<modular_core::types::ExternalClockState> {
+        if let Some(frame) = self.session.frame(cb_frame) {
+            return Some(modular_core::types::ExternalClockState {
+                bar_phase: frame.bar_phase,
+                bpm: frame.bpm,
+                bar_index: frame.bar_index,
+            });
+        }
+        self.link.phase_at_frame(cb_frame).map(|(bar_phase, bpm)| {
+            modular_core::types::ExternalClockState {
+                bar_phase,
+                bpm,
+                bar_index: None,
+            }
+        })
+    }
+
+    /// Resolve the queued `at_bar` update's target bar on its first scan.
+    /// When the timeline had already entered `at_bar` before `cb_frame`, the
+    /// update retargets to the next bar boundary and its id is reported late.
+    fn resolve_session_target(&mut self, at_bar: i64, cb_frame: usize) -> Option<i64> {
+        if let Some(target) = self.queued_session_target {
+            return Some(target);
+        }
+        let position = self.session.bar_position(cb_frame)?;
+        let target = if self.session.passed_bar_before(at_bar, cb_frame) {
+            if let Some((update, _)) = &self.queued_update {
+                self.transport_meter.write_late_update_id(update.update_id);
+            }
+            crate::session_clock::split_bar(position).1 + 1
+        } else {
+            at_bar
+        };
+        self.queued_session_target = Some(target);
+        Some(target)
+    }
+
+    /// Advance ROOT_CLOCK one slot at a time through `[from, end)` until the
+    /// session bar number reaches `target`, returning that slot unprocessed so
+    /// the swap renders it under the new patch.
+    fn fill_and_scan_session_bar(
+        &self,
+        target: i64,
+        from: usize,
+        end: usize,
+        written_at_call: usize,
+    ) -> Option<usize> {
+        use modular_core::types::ROOT_CLOCK_ID;
+        let root_clock = self.patch.sampleables.get(&*ROOT_CLOCK_ID);
+        for i in from..end {
+            let cb_frame = written_at_call + (i - from);
+            let frame = self.session.frame(cb_frame)?;
+            if crate::session_clock::split_bar(frame.bar_position).1 >= target {
+                return Some(i);
+            }
+            if let Some(root_clock) = root_clock {
+                root_clock.sync_external_clock(modular_core::types::ExternalClockState {
+                    bar_phase: frame.bar_phase,
+                    bpm: frame.bpm,
+                    bar_index: frame.bar_index,
+                });
+                root_clock.ensure_processed_to(i + 1);
+            }
+        }
+        None
+    }
+
     /// Eager-fill ROOT_CLOCK from per-block slot `from` (inclusive) to `end`
-    /// (exclusive). Each slot is synced under this callback's Link host-time
+    /// (exclusive). Each slot is synced under this callback's external host-time
     /// anchor — the cpal-frame index for in-block slot `i` is
     /// `written_at_call + (i - from)`. Subsequent `get_value_at(port, ch, i)`
     /// reads on ROOT_CLOCK are pure cache hits.
@@ -2349,11 +2551,8 @@ impl AudioProcessor {
         };
         for i in from..end {
             let cb_frame = written_at_call + (i - from);
-            if let Some((bar_phase, tempo)) = self.link.phase_at_frame(cb_frame) {
-                root_clock.sync_external_clock(modular_core::types::ExternalClockState {
-                    bar_phase,
-                    bpm: tempo,
-                });
+            if let Some(state) = self.external_clock_at_frame(cb_frame) {
+                root_clock.sync_external_clock(state);
             }
             root_clock.ensure_processed_to(i + 1);
         }
@@ -2388,11 +2587,8 @@ impl AudioProcessor {
         };
         for i in from..end {
             let cb_frame = written_at_call + (i - from);
-            if let Some((bar_phase, tempo)) = self.link.phase_at_frame(cb_frame) {
-                root_clock.sync_external_clock(modular_core::types::ExternalClockState {
-                    bar_phase,
-                    bpm: tempo,
-                });
+            if let Some(state) = self.external_clock_at_frame(cb_frame) {
+                root_clock.sync_external_clock(state);
             }
             root_clock.ensure_processed_to(i + 1);
             if root_clock.get_value_at(port, 0, i) >= 1.0 {
@@ -2400,6 +2596,412 @@ impl AudioProcessor {
             }
         }
         None
+    }
+
+    /// Run one audio callback: drain commands, read the external clocks,
+    /// render `num_frames` frames, and do the per-callback bookkeeping.
+    /// `session_host_micros` is the host clock reading the session clock uses
+    /// for this buffer; `write` receives each emitted sample as
+    /// `(frame, channel, value)`.
+    #[allow(clippy::too_many_arguments)]
+    fn render_callback(
+        &mut self,
+        num_frames: usize,
+        num_channels: usize,
+        session_host_micros: i64,
+        final_state_processor: &mut FinalStateProcessor,
+        input_reader: &mut InputBufferReader,
+        recording_feed: &Mutex<Option<RecordingFeed>>,
+        mut write: impl FnMut(usize, usize, f32),
+    ) {
+        use modular_core::types::{ROOT_CLOCK_ID, ROOT_ID};
+        // Mirror the main-thread enable atomic into the audio thread's
+        // profiler TLS. Cheap relaxed load once per callback.
+        modular_core::profiling::refresh_enabled();
+
+        // Process any pending commands from the main thread
+        {
+            profiling::scope!("process_commands");
+            self.process_commands();
+        }
+
+        // Capture Link session state once per buffer (before frame loop).
+        self.link.capture_buffer_state(self.sample_rate);
+
+        // Shoreline transport is decoupled from Link peer transport:
+        // peers never start or stop Shoreline. The only Link-driven transport
+        // action is releasing a locally-initiated quantized start when the
+        // shared timeline reaches a bar boundary.
+        if self.link.check_pending_start_release() {
+            self.stopped
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            let msg = modular_core::types::Message::Clock(ClockMessages::Start);
+            let _ = self.patch.dispatch_message(&msg);
+        }
+
+        // Write Link state to transport meter for UI visibility. Done
+        // BEFORE the is_stopped() guard so the UI always shows the
+        // free-running Link phase, even when Shoreline is stopped.
+        self.link.write_meter(&self.transport_meter);
+
+        // Runs after Link's meter write so the session timeline's tempo
+        // wins the shared meter field.
+        self.session
+            .capture_at(session_host_micros, self.sample_rate);
+        self.session.resolve_pending_start();
+        self.session.write_meter(&self.transport_meter);
+
+        let block_size = self.block_size;
+
+        // Initial block-boundary entry: either fresh callback at a clean
+        // boundary, or resuming mid-block from the previous callback.
+        // Either way, eager-fill ROOT_CLOCK under THIS callback's
+        // host-time anchor for the samples we will emit.
+        if self.block_pos >= block_size {
+            for module in self.patch.sampleables.values() {
+                module.start_block();
+            }
+            self.block_pos = 0;
+        }
+
+        let mut written: usize = 0;
+
+        // While a queued update is armed the clock is advanced
+        // inside the trigger scan instead, one slot at a time, so
+        // its state never passes the eventual swap point.
+        if self.queued_update.is_none() {
+            let eager_end = block_size.min(self.block_pos + num_frames);
+            self.eager_fill_clock(self.block_pos, eager_end, written);
+        }
+
+        {
+            profiling::scope!("process_frames");
+            while written < num_frames {
+                // Cross internal block boundary mid-callback.
+                if self.block_pos >= block_size {
+                    for module in self.patch.sampleables.values() {
+                        module.start_block();
+                    }
+                    self.block_pos = 0;
+                    if self.queued_update.is_none() {
+                        let eager_end = block_size.min(num_frames - written);
+                        self.eager_fill_clock(0, eager_end, written);
+                    }
+                }
+
+                let scan_end = block_size.min(self.block_pos + (num_frames - written));
+
+                // A session-clock start armed for a slot in this range ends
+                // the segment there, so playback begins on that exact frame.
+                let start_slot = self.session_start_slot(self.block_pos, scan_end, written);
+                let scan_limit = start_slot.unwrap_or(scan_end);
+                let trigger_sample = self.scan_queued_trigger(scan_limit, written);
+
+                let end = trigger_sample
+                    .map(|n| n.min(scan_limit))
+                    .unwrap_or(scan_limit);
+
+                // Nothing may render past the emit boundary: a
+                // queued update command can arrive between
+                // callbacks and swap at any sample, and
+                // `transfer_state_from` must hand the new patch
+                // state that sits exactly at the swap point. The
+                // ceiling clamps the drain's block-mode reads
+                // below, which otherwise fill to the block end.
+                modular_core::types::set_block_render_ceiling(end);
+
+                // Force every module to advance to `end`, in cache-efficient
+                // producer-before-consumer order, so modules not reachable from
+                // the output or any scope still process. The root/scope reads in
+                // the drain below then become pure cache hits. Skipped while
+                // stopped so the patch freezes on stop — the drain still ramps
+                // connected modules out via the root pull during the fade.
+                if end > self.block_pos {
+                    let slots = self.block_pos..end;
+                    self.pull_input_frames(input_reader, slots);
+                }
+                if end > self.block_pos && !self.is_stopped() {
+                    self.process_all_modules_to(end);
+                }
+
+                // Drain [block_pos, end) through the volume-change state machine
+                // and soft clip into the output.
+                if end > self.block_pos {
+                    let mut scope_guard = self.scope_collection.try_lock();
+                    match scope_guard.as_mut() {
+                        Some(scopes) => self.scope_stash.settle(scopes),
+                        None => {
+                            let sampleables = &self.patch.sampleables;
+                            self.scope_stash.stash(self.block_pos..end, |key, i| {
+                                sampleables.get(&key.module_id).map(|module| {
+                                    module.get_value_at(&key.port_name, key.channel as usize, i)
+                                })
+                            });
+                        }
+                    }
+                    let mut recording_guard = recording_feed.try_lock();
+                    let mut vu_guard = self.vu_collection.try_lock();
+                    for i in self.block_pos..end {
+                        let is_stopped = self.is_stopped();
+                        match (final_state_processor.prev_is_stopped, is_stopped) {
+                            (true, false) => {
+                                final_state_processor.volume_change = VolumeChange::None;
+                                final_state_processor.attenuation_factor = 1.0;
+                            }
+                            (false, true) => {
+                                final_state_processor.volume_change = VolumeChange::Decrease;
+                            }
+                            _ => {}
+                        }
+                        final_state_processor.prev_is_stopped = is_stopped;
+                        if matches!(final_state_processor.volume_change, VolumeChange::Decrease) {
+                            final_state_processor.attenuation_factor *= 0.999;
+                            if final_state_processor.attenuation_factor < 0.0001 {
+                                final_state_processor.attenuation_factor = 0.0;
+                                final_state_processor.volume_change = VolumeChange::None;
+                            }
+                        }
+
+                        if final_state_processor.attenuation_factor < f32::EPSILON {
+                            final_state_processor.reset_declick();
+                            for ch in 0..num_channels {
+                                write(written, ch, 0.0f32);
+                            }
+                            written += 1;
+                            continue;
+                        }
+
+                        if let Some(root) = self.patch.sampleables.get(&*ROOT_ID) {
+                            let mut any_audible = false;
+                            let mut samples = [0.0f32; PORT_MAX_CHANNELS];
+                            // Compensated ch-0 volts, reused by the
+                            // recording tap below so the file captures
+                            // exactly what the declick emitted.
+                            let mut declicked_ch0 = 0.0f32;
+                            for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
+                                // Non-cycling: the root port is only
+                                // as wide as the highest channel the
+                                // patch's out groups name, and device
+                                // channels above that are speakers to
+                                // leave silent. The silence still goes
+                                // through the declick, so an edit that
+                                // narrows the output fades them out
+                                // rather than cutting them.
+                                let raw = root.get_value_at_no_cycle(&ROOT_OUTPUT_PORT, ch, i);
+                                let v = final_state_processor.declick(ch, raw);
+                                if ch == 0 {
+                                    declicked_ch0 = v;
+                                }
+                                let sample = safety_soft_clip(
+                                    v * AUDIO_OUTPUT_ATTENUATION
+                                        * final_state_processor.attenuation_factor,
+                                );
+                                samples[ch] = sample;
+                                if sample.abs() >= 0.0005 {
+                                    any_audible = true;
+                                }
+                            }
+                            if is_stopped && !any_audible {
+                                final_state_processor.attenuation_factor = 0.0;
+                                final_state_processor.volume_change = VolumeChange::None;
+                                final_state_processor.reset_declick();
+                                for ch in 0..num_channels {
+                                    write(written, ch, 0.0f32);
+                                }
+                            } else {
+                                for ch in 0..num_channels {
+                                    let v = if ch < PORT_MAX_CHANNELS {
+                                        samples[ch]
+                                    } else {
+                                        0.0
+                                    };
+                                    write(written, ch, v);
+                                }
+                            }
+                            // Recorded samples stay f32 — the WAV
+                            // header declares Float32 regardless of
+                            // the stream's sample type `T`.
+                            if let Some(feed_lock) = recording_guard.as_mut()
+                                && let Some(feed) = feed_lock.as_mut()
+                            {
+                                let v = declicked_ch0
+                                    * AUDIO_OUTPUT_ATTENUATION
+                                    * final_state_processor.attenuation_factor;
+                                feed.push(safety_soft_clip(v));
+                            }
+                            if let Some(scope_lock) = scope_guard.as_mut() {
+                                for (key, scope_buffer) in scope_lock.iter_mut() {
+                                    if let Some(module) = self.patch.sampleables.get(&key.module_id)
+                                    {
+                                        let s = module.get_value_at(
+                                            &key.port_name,
+                                            key.channel as usize,
+                                            i,
+                                        );
+                                        scope_buffer.push(s);
+                                    }
+                                }
+                            }
+                            if let Some(vu_lock) = vu_guard.as_mut() {
+                                for meter in vu_lock.iter_mut() {
+                                    if let Some(module) =
+                                        self.patch.sampleables.get(&meter.module_id)
+                                    {
+                                        for ch in 0..meter.channels {
+                                            meter.accumulate(
+                                                ch,
+                                                module.get_value_at(&meter.port_name, ch, i),
+                                            );
+                                        }
+                                    }
+                                    // Signal-driven pan/gain are
+                                    // display-only and each write
+                                    // overwrites the last, so only
+                                    // the block's final sample ever
+                                    // reaches take_frame. Sample the
+                                    // taps once here, not per sample
+                                    // (a String-keyed HashMap lookup
+                                    // each time).
+                                    if i == end - 1 {
+                                        let sampleables = &self.patch.sampleables;
+                                        let sample_tap =
+                                            |tap: &Option<modular_core::types::ScopeChannel>| {
+                                                tap.as_ref().and_then(|src| {
+                                                    sampleables.get(&src.module_id).map(|m| {
+                                                        m.get_value_at(
+                                                            &src.port_name,
+                                                            src.channel as usize,
+                                                            i,
+                                                        )
+                                                    })
+                                                })
+                                            };
+                                        if let Some(v) = sample_tap(&meter.pan_source) {
+                                            meter.set_pan_value(v);
+                                        }
+                                        if let Some(v) = sample_tap(&meter.gain_source) {
+                                            meter.set_gain_value(v);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            final_state_processor.reset_declick();
+                            for ch in 0..num_channels {
+                                write(written, ch, 0.0f32);
+                            }
+                        }
+
+                        written += 1;
+                    }
+                    self.block_pos = end;
+                }
+
+                let start_due = start_slot == Some(self.block_pos);
+                if start_due {
+                    self.release_session_start(self.block_pos);
+                }
+
+                // Apply queued swap if we stopped at the trigger sample.
+                if trigger_sample == Some(self.block_pos) && self.block_pos < block_size {
+                    let (update, _) = self.queued_update.take().unwrap();
+                    let applied_id = update.update_id;
+                    let swap_pos = self.block_pos;
+                    self.apply_patch_update_at_frame(update, swap_pos, written);
+                    // The swap may step the output (a muted patch
+                    // replacing a loud one, an out removed);
+                    // release the step at the emit stage.
+                    final_state_processor.arm_declick();
+                    self.transport_meter.write_applied_update_id(applied_id);
+                    // ROOT_CLOCK's transport state carries across the swap via
+                    // `transfer_state_from`. Fill this callback's remaining range
+                    // from `swap_pos` forward under the NEW patch's params. On a
+                    // quantized swap the trigger slot was already computed while
+                    // scanning, so recomputing it here runs the clock one sample
+                    // ahead — a bounded, sub-0.03 ms offset; an Immediate swap's
+                    // clock arrives untouched and fills exactly once.
+                    if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+                        root_clock.set_initial_index(swap_pos);
+                    }
+                    let eager_end = block_size.min(self.block_pos + (num_frames - written));
+                    self.eager_fill_clock(swap_pos, eager_end, written);
+                } else if start_due {
+                    // Refill ROOT_CLOCK from the start slot under the origin
+                    // the start just set. While an update is queued the
+                    // trigger scan fills it instead.
+                    let start_pos = self.block_pos;
+                    if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+                        root_clock.set_initial_index(start_pos);
+                    }
+                    if self.queued_update.is_none() {
+                        let eager_end = block_size.min(start_pos + (num_frames - written));
+                        self.eager_fill_clock(start_pos, eager_end, written);
+                    }
+                }
+            }
+        }
+
+        // Transport meter — read at the last sample we just consumed.
+        {
+            let last = self.block_pos.saturating_sub(1);
+            let has_queued = self.queued_update.is_some();
+            if let Some(clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+                let bar_phase = clock.get_value_at("playhead", 0, last) as f64;
+                let bar_count = clock.get_value_at("playhead", 1, last) as u64;
+                let beat_in_bar = clock.get_value_at("beatInBar", 0, last) as u32;
+                let is_playing = !self.is_stopped();
+                self.transport_meter.write_from_audio(
+                    bar_phase,
+                    bar_count,
+                    beat_in_bar,
+                    is_playing,
+                    has_queued,
+                );
+            } else {
+                self.transport_meter
+                    .write_from_audio(0.0, 0, 0, false, has_queued);
+            }
+        }
+
+        // Increment Link sample count for HostTimeFilter
+        self.link.add_samples(num_frames as u64);
+        self.session.add_samples(num_frames as u64);
+
+        // Collect module states for UI (e.g., seq step highlighting)
+        // Done once per buffer, not per frame, to minimize overhead
+        {
+            profiling::scope!("collect_module_states");
+            self.collect_module_states();
+        }
+
+        // Retry any deferred profiler shared-map swap, then flush this
+        // callback's per-module profile data into the cross-thread
+        // snapshot. Both are no-ops when nothing is pending / profiling
+        // is disabled (early-out inside the calls).
+        self.retry_pending_profile_seed();
+        modular_core::profiling::flush_into(&self.module_profile_collection);
+    }
+
+    /// The slot in `[from, end)` at which an armed session-clock start
+    /// releases, `written` being the cpal frame of `from`.
+    fn session_start_slot(&self, from: usize, end: usize, written: usize) -> Option<usize> {
+        self.session
+            .pending_start_offset(written, end - from)
+            .map(|offset| from + offset)
+    }
+
+    /// Release the armed session-clock start at per-block slot `slot`: play
+    /// from that slot, counting the song's bars from the start bar.
+    fn release_session_start(&mut self, slot: usize) {
+        self.session.release_pending_start();
+        self.stopped.store(false, Ordering::SeqCst);
+        let _ = self
+            .patch
+            .dispatch_message(&Message::Clock(ClockMessages::Start));
+        // Nothing processed while stopped, so every module starts at `slot`.
+        for module in self.patch.sampleables.values() {
+            module.set_initial_index(slot);
+        }
     }
 
     fn collect_module_states(&self) {
@@ -2477,427 +3079,19 @@ where
                 #[cfg(feature = "alloc-detector")]
                 let _alloc_scope = crate::alloc_detector::AudioThreadScope::enter();
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    use modular_core::types::{ROOT_CLOCK_ID, ROOT_ID};
                     profiling::scope!("audio_callback");
 
                     let callback_start = Instant::now();
 
-                    // Mirror the main-thread enable atomic into the audio thread's
-                    // profiler TLS. Cheap relaxed load once per callback.
-                    modular_core::profiling::refresh_enabled();
-
-                    // Process any pending commands from the main thread
-                    {
-                        profiling::scope!("process_commands");
-                        audio_processor.process_commands();
-                    }
-
-                    // Capture Link session state once per buffer (before frame loop).
-                    audio_processor
-                        .link
-                        .capture_buffer_state(audio_processor.sample_rate);
-
-                    // Shoreline transport is decoupled from Link peer transport:
-                    // peers never start or stop Shoreline. The only Link-driven transport
-                    // action is releasing a locally-initiated quantized start when the
-                    // shared timeline reaches a bar boundary.
-                    if audio_processor.link.check_pending_start_release() {
-                        audio_processor
-                            .stopped
-                            .store(false, std::sync::atomic::Ordering::SeqCst);
-                        let msg = modular_core::types::Message::Clock(ClockMessages::Start);
-                        let _ = audio_processor.patch.dispatch_message(&msg);
-                    }
-
-                    // Write Link state to transport meter for UI visibility. Done
-                    // BEFORE the is_stopped() guard so the UI always shows the
-                    // free-running Link phase, even when Shoreline is stopped.
-                    audio_processor
-                        .link
-                        .write_meter(&audio_processor.transport_meter);
-
-                    let num_frames = output.len() / num_channels;
-                    let block_size = audio_processor.block_size;
-
-                    // Initial block-boundary entry: either fresh callback at a clean
-                    // boundary, or resuming mid-block from the previous callback.
-                    // Either way, eager-fill ROOT_CLOCK under THIS callback's
-                    // host-time anchor for the samples we will emit.
-                    if audio_processor.block_pos >= block_size {
-                        for module in audio_processor.patch.sampleables.values() {
-                            module.start_block();
-                        }
-                        audio_processor.block_pos = 0;
-                    }
-
-                    let mut written: usize = 0;
-
-                    // While a queued update is armed the clock is advanced
-                    // inside the trigger scan instead, one slot at a time, so
-                    // its state never passes the eventual swap point.
-                    if audio_processor.queued_update.is_none() {
-                        let eager_end = block_size.min(audio_processor.block_pos + num_frames);
-                        audio_processor.eager_fill_clock(
-                            audio_processor.block_pos,
-                            eager_end,
-                            written,
-                        );
-                    }
-
-                    {
-                        profiling::scope!("process_frames");
-                        while written < num_frames {
-                            // Cross internal block boundary mid-callback.
-                            if audio_processor.block_pos >= block_size {
-                                for module in audio_processor.patch.sampleables.values() {
-                                    module.start_block();
-                                }
-                                audio_processor.block_pos = 0;
-                                if audio_processor.queued_update.is_none() {
-                                    let eager_end = block_size.min(num_frames - written);
-                                    audio_processor.eager_fill_clock(0, eager_end, written);
-                                }
-                            }
-
-                            let scan_end =
-                                block_size.min(audio_processor.block_pos + (num_frames - written));
-
-                            // Resolve trigger sample for queued patch swap. The
-                            // quantized scans fill ROOT_CLOCK as they go and
-                            // stop at the trigger slot; an armed Immediate
-                            // update leaves the clock untouched (the post-swap
-                            // refill fills it under the new patch).
-                            let trigger_sample: Option<usize> =
-                                match audio_processor.queued_update.as_ref().map(|(_, t)| t) {
-                                    Some(QueuedTrigger::Immediate) => {
-                                        Some(audio_processor.block_pos)
-                                    }
-                                    Some(QueuedTrigger::NextBar) => audio_processor
-                                        .fill_and_scan_trigger(
-                                            "barTrigger",
-                                            audio_processor.block_pos,
-                                            scan_end,
-                                            written,
-                                        ),
-                                    Some(QueuedTrigger::NextBeat) => audio_processor
-                                        .fill_and_scan_trigger(
-                                            "beatTrigger",
-                                            audio_processor.block_pos,
-                                            scan_end,
-                                            written,
-                                        ),
-                                    None => None,
-                                };
-
-                            let end = trigger_sample.map(|n| n.min(scan_end)).unwrap_or(scan_end);
-
-                            // Nothing may render past the emit boundary: a
-                            // queued update command can arrive between
-                            // callbacks and swap at any sample, and
-                            // `transfer_state_from` must hand the new patch
-                            // state that sits exactly at the swap point. The
-                            // ceiling clamps the drain's block-mode reads
-                            // below, which otherwise fill to the block end.
-                            modular_core::types::set_block_render_ceiling(end);
-
-                            // Force every module to advance to `end`, in cache-efficient
-                            // producer-before-consumer order, so modules not reachable from
-                            // the output or any scope still process. The root/scope reads in
-                            // the drain below then become pure cache hits. Skipped while
-                            // stopped so the patch freezes on stop — the drain still ramps
-                            // connected modules out via the root pull during the fade.
-                            if end > audio_processor.block_pos {
-                                let slots = audio_processor.block_pos..end;
-                                audio_processor.pull_input_frames(&mut input_reader, slots);
-                            }
-                            if end > audio_processor.block_pos && !audio_processor.is_stopped() {
-                                audio_processor.process_all_modules_to(end);
-                            }
-
-                            // Drain [block_pos, end) into cpal output, inlining the
-                            // volume-change state machine + soft clip that
-                            // `FinalStateProcessor` used to provide per-frame.
-                            if end > audio_processor.block_pos {
-                                let mut scope_guard = audio_processor.scope_collection.try_lock();
-                                match scope_guard.as_mut() {
-                                    Some(scopes) => audio_processor.scope_stash.settle(scopes),
-                                    None => {
-                                        let sampleables = &audio_processor.patch.sampleables;
-                                        audio_processor.scope_stash.stash(
-                                            audio_processor.block_pos..end,
-                                            |key, i| {
-                                                sampleables.get(&key.module_id).map(|module| {
-                                                    module.get_value_at(
-                                                        &key.port_name,
-                                                        key.channel as usize,
-                                                        i,
-                                                    )
-                                                })
-                                            },
-                                        );
-                                    }
-                                }
-                                let mut recording_guard = recording_feed.try_lock();
-                                let mut vu_guard = audio_processor.vu_collection.try_lock();
-                                for i in audio_processor.block_pos..end {
-                                    let is_stopped = audio_processor.is_stopped();
-                                    match (final_state_processor.prev_is_stopped, is_stopped) {
-                                        (true, false) => {
-                                            final_state_processor.volume_change =
-                                                VolumeChange::None;
-                                            final_state_processor.attenuation_factor = 1.0;
-                                        }
-                                        (false, true) => {
-                                            final_state_processor.volume_change =
-                                                VolumeChange::Decrease;
-                                        }
-                                        _ => {}
-                                    }
-                                    final_state_processor.prev_is_stopped = is_stopped;
-                                    if matches!(
-                                        final_state_processor.volume_change,
-                                        VolumeChange::Decrease
-                                    ) {
-                                        final_state_processor.attenuation_factor *= 0.999;
-                                        if final_state_processor.attenuation_factor < 0.0001 {
-                                            final_state_processor.attenuation_factor = 0.0;
-                                            final_state_processor.volume_change =
-                                                VolumeChange::None;
-                                        }
-                                    }
-
-                                    let frame_start = written * num_channels;
-
-                                    if final_state_processor.attenuation_factor < f32::EPSILON {
-                                        final_state_processor.reset_declick();
-                                        for ch in 0..num_channels {
-                                            output[frame_start + ch] = T::from_sample(0.0f32);
-                                        }
-                                        written += 1;
-                                        continue;
-                                    }
-
-                                    if let Some(root) =
-                                        audio_processor.patch.sampleables.get(&*ROOT_ID)
-                                    {
-                                        let mut any_audible = false;
-                                        let mut samples = [0.0f32; PORT_MAX_CHANNELS];
-                                        // Compensated ch-0 volts, reused by the
-                                        // recording tap below so the file captures
-                                        // exactly what the declick emitted.
-                                        let mut declicked_ch0 = 0.0f32;
-                                        for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
-                                            // Non-cycling: the root port is only
-                                            // as wide as the highest channel the
-                                            // patch's out groups name, and device
-                                            // channels above that are speakers to
-                                            // leave silent. The silence still goes
-                                            // through the declick, so an edit that
-                                            // narrows the output fades them out
-                                            // rather than cutting them.
-                                            let raw = root.get_value_at_no_cycle(
-                                                &ROOT_OUTPUT_PORT,
-                                                ch,
-                                                i,
-                                            );
-                                            let v = final_state_processor.declick(ch, raw);
-                                            if ch == 0 {
-                                                declicked_ch0 = v;
-                                            }
-                                            let sample = safety_soft_clip(
-                                                v * AUDIO_OUTPUT_ATTENUATION
-                                                    * final_state_processor.attenuation_factor,
-                                            );
-                                            samples[ch] = sample;
-                                            if sample.abs() >= 0.0005 {
-                                                any_audible = true;
-                                            }
-                                        }
-                                        if is_stopped && !any_audible {
-                                            final_state_processor.attenuation_factor = 0.0;
-                                            final_state_processor.volume_change =
-                                                VolumeChange::None;
-                                            final_state_processor.reset_declick();
-                                            for ch in 0..num_channels {
-                                                output[frame_start + ch] = T::from_sample(0.0f32);
-                                            }
-                                        } else {
-                                            for ch in 0..num_channels {
-                                                let v = if ch < PORT_MAX_CHANNELS {
-                                                    samples[ch]
-                                                } else {
-                                                    0.0
-                                                };
-                                                output[frame_start + ch] = T::from_sample(v);
-                                            }
-                                        }
-                                        // Recorded samples stay f32 — the WAV
-                                        // header declares Float32 regardless of
-                                        // the stream's sample type `T`.
-                                        if let Some(feed_lock) = recording_guard.as_mut()
-                                            && let Some(feed) = feed_lock.as_mut()
-                                        {
-                                            let v = declicked_ch0
-                                                * AUDIO_OUTPUT_ATTENUATION
-                                                * final_state_processor.attenuation_factor;
-                                            feed.push(safety_soft_clip(v));
-                                        }
-                                        if let Some(scope_lock) = scope_guard.as_mut() {
-                                            for (key, scope_buffer) in scope_lock.iter_mut() {
-                                                if let Some(module) = audio_processor
-                                                    .patch
-                                                    .sampleables
-                                                    .get(&key.module_id)
-                                                {
-                                                    let s = module.get_value_at(
-                                                        &key.port_name,
-                                                        key.channel as usize,
-                                                        i,
-                                                    );
-                                                    scope_buffer.push(s);
-                                                }
-                                            }
-                                        }
-                                        if let Some(vu_lock) = vu_guard.as_mut() {
-                                            for meter in vu_lock.iter_mut() {
-                                                if let Some(module) = audio_processor
-                                                    .patch
-                                                    .sampleables
-                                                    .get(&meter.module_id)
-                                                {
-                                                    for ch in 0..meter.channels {
-                                                        meter.accumulate(
-                                                            ch,
-                                                            module.get_value_at(
-                                                                &meter.port_name,
-                                                                ch,
-                                                                i,
-                                                            ),
-                                                        );
-                                                    }
-                                                }
-                                                // Signal-driven pan/gain are
-                                                // display-only and each write
-                                                // overwrites the last, so only
-                                                // the block's final sample ever
-                                                // reaches take_frame. Sample the
-                                                // taps once here, not per sample
-                                                // (a String-keyed HashMap lookup
-                                                // each time).
-                                                if i == end - 1 {
-                                                    let sampleables =
-                                                        &audio_processor.patch.sampleables;
-                                                    let sample_tap = |tap: &Option<
-                                                        modular_core::types::ScopeChannel,
-                                                    >| {
-                                                        tap.as_ref().and_then(|src| {
-                                                            sampleables
-                                                                .get(&src.module_id)
-                                                                .map(|m| {
-                                                                    m.get_value_at(
-                                                                        &src.port_name,
-                                                                        src.channel as usize,
-                                                                        i,
-                                                                    )
-                                                                })
-                                                        })
-                                                    };
-                                                    if let Some(v) = sample_tap(&meter.pan_source) {
-                                                        meter.set_pan_value(v);
-                                                    }
-                                                    if let Some(v) = sample_tap(&meter.gain_source)
-                                                    {
-                                                        meter.set_gain_value(v);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        final_state_processor.reset_declick();
-                                        for ch in 0..num_channels {
-                                            output[frame_start + ch] = T::from_sample(0.0f32);
-                                        }
-                                    }
-
-                                    written += 1;
-                                }
-                                audio_processor.block_pos = end;
-                            }
-
-                            // Apply queued swap if we stopped at the trigger sample.
-                            if trigger_sample == Some(audio_processor.block_pos)
-                                && audio_processor.block_pos < block_size
-                            {
-                                let (update, _) = audio_processor.queued_update.take().unwrap();
-                                let applied_id = update.update_id;
-                                let swap_pos = audio_processor.block_pos;
-                                audio_processor.apply_patch_update(update, swap_pos);
-                                // The swap may step the output (a muted patch
-                                // replacing a loud one, an out removed);
-                                // release the step at the emit stage.
-                                final_state_processor.arm_declick();
-                                audio_processor
-                                    .transport_meter
-                                    .write_applied_update_id(applied_id);
-                                // ROOT_CLOCK's transport state carries across the swap via
-                                // `transfer_state_from`. Fill this callback's remaining range
-                                // from `swap_pos` forward under the NEW patch's params. On a
-                                // quantized swap the trigger slot was already computed while
-                                // scanning, so recomputing it here runs the clock one sample
-                                // ahead — a bounded, sub-0.03 ms offset; an Immediate swap's
-                                // clock arrives untouched and fills exactly once.
-                                if let Some(root_clock) =
-                                    audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
-                                {
-                                    root_clock.set_initial_index(swap_pos);
-                                }
-                                let eager_end = block_size
-                                    .min(audio_processor.block_pos + (num_frames - written));
-                                audio_processor.eager_fill_clock(swap_pos, eager_end, written);
-                            }
-                        }
-                    }
-
-                    // Transport meter — read at the last sample we just consumed.
-                    {
-                        let last = audio_processor.block_pos.saturating_sub(1);
-                        let has_queued = audio_processor.queued_update.is_some();
-                        if let Some(clock) = audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
-                        {
-                            let bar_phase = clock.get_value_at("playhead", 0, last) as f64;
-                            let bar_count = clock.get_value_at("playhead", 1, last) as u64;
-                            let beat_in_bar = clock.get_value_at("beatInBar", 0, last) as u32;
-                            let is_playing = !audio_processor.is_stopped();
-                            audio_processor.transport_meter.write_from_audio(
-                                bar_phase,
-                                bar_count,
-                                beat_in_bar,
-                                is_playing,
-                                has_queued,
-                            );
-                        } else {
-                            audio_processor
-                                .transport_meter
-                                .write_from_audio(0.0, 0, 0, false, has_queued);
-                        }
-                    }
-
-                    // Increment Link sample count for HostTimeFilter
-                    audio_processor.link.add_samples(num_frames as u64);
-
-                    // Collect module states for UI (e.g., seq step highlighting)
-                    // Done once per buffer, not per frame, to minimize overhead
-                    {
-                        profiling::scope!("collect_module_states");
-                        audio_processor.collect_module_states();
-                    }
-
-                    // Retry any deferred profiler shared-map swap, then flush this
-                    // callback's per-module profile data into the cross-thread
-                    // snapshot. Both are no-ops when nothing is pending / profiling
-                    // is disabled (early-out inside the calls).
-                    audio_processor.retry_pending_profile_seed();
-                    modular_core::profiling::flush_into(&audio_processor.module_profile_collection);
+                    audio_processor.render_callback(
+                        output.len() / num_channels,
+                        num_channels,
+                        crate::session_clock::session_clock_micros(),
+                        &mut final_state_processor,
+                        &mut input_reader,
+                        &recording_feed,
+                        |frame, ch, v| output[frame * num_channels + ch] = T::from_sample(v),
+                    );
 
                     let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
 
@@ -3225,6 +3419,15 @@ pub struct TransportMeter {
     /// Armed for a quantized start — waiting for a Link bar boundary before
     /// playback actually begins. While true, `is_playing` is still false.
     link_pending_start: AtomicBool,
+    /// Whether the session clock is active
+    session_clock_active: AtomicBool,
+    /// Session bar position at the start of the latest callback, as f64 bits
+    session_bar_bits: AtomicU64,
+    /// Armed for a session-clock start, waiting for its bar
+    session_pending_start: AtomicBool,
+    /// The update_id of the most recent `at_bar` update whose bar had already
+    /// passed when it was first scanned
+    last_late_update_id: AtomicU64,
 }
 
 impl Default for TransportMeter {
@@ -3244,6 +3447,10 @@ impl Default for TransportMeter {
             link_peers: AtomicU32::new(0),
             link_phase_bits: AtomicU64::new(0f64.to_bits()),
             link_pending_start: AtomicBool::new(false),
+            session_clock_active: AtomicBool::new(false),
+            session_bar_bits: AtomicU64::new(0f64.to_bits()),
+            session_pending_start: AtomicBool::new(false),
+            last_late_update_id: AtomicU64::new(0),
         }
     }
 }
@@ -3327,6 +3534,29 @@ impl TransportMeter {
         self.link_pending_start.store(armed, Ordering::Relaxed);
     }
 
+    /// Write the session clock state: active flag, bar position, pending start.
+    #[inline]
+    pub fn write_session_state(&self, active: bool, bar_position: f64, pending_start: bool) {
+        self.session_clock_active.store(active, Ordering::Relaxed);
+        self.session_bar_bits
+            .store(bar_position.to_bits(), Ordering::Relaxed);
+        self.session_pending_start
+            .store(pending_start, Ordering::Relaxed);
+    }
+
+    /// Record an `at_bar` update that applies a bar later than requested.
+    #[inline]
+    pub fn write_late_update_id(&self, update_id: u64) {
+        self.last_late_update_id.store(update_id, Ordering::Relaxed);
+    }
+
+    /// Whether the session clock is active (main-thread view, written
+    /// immediately by `set_session_clock` and refreshed every callback).
+    #[inline]
+    pub fn read_session_clock_active(&self) -> bool {
+        self.session_clock_active.load(Ordering::Relaxed)
+    }
+
     /// Read the current Link enabled flag (used by the main thread for
     /// idempotency checks before constructing/destroying Link resources).
     #[inline]
@@ -3359,6 +3589,10 @@ impl TransportMeter {
             link_peers: self.link_peers.load(Ordering::Relaxed),
             link_phase: f64::from_bits(self.link_phase_bits.load(Ordering::Relaxed)),
             link_pending_start: self.link_pending_start.load(Ordering::Relaxed),
+            session_clock_active: self.session_clock_active.load(Ordering::Relaxed),
+            session_bar: f64::from_bits(self.session_bar_bits.load(Ordering::Relaxed)),
+            session_pending_start: self.session_pending_start.load(Ordering::Relaxed),
+            last_late_update_id: self.last_late_update_id.load(Ordering::Relaxed) as f64,
         }
     }
 }
@@ -3397,7 +3631,22 @@ pub struct TransportSnapshot {
     /// thread is waiting for the next Link bar boundary before actually
     /// flipping `is_playing`. Only meaningful when `link_enabled` is true.
     pub link_pending_start: bool,
+    /// Whether the session clock drives the transport
+    pub session_clock_active: bool,
+    /// Session bar position (bar number plus phase) at the latest audio
+    /// callback. Only meaningful when `session_clock_active` is true.
+    pub session_bar: f64,
+    /// Armed for a session-clock start, waiting for its bar
+    pub session_pending_start: bool,
+    /// The update_id of the most recent `atBar` update that applied a bar late
+    /// because its bar had already begun when it reached the audio thread (as
+    /// f64 for N-API compatibility). 0 when none has.
+    pub last_late_update_id: f64,
 }
+
+#[cfg(test)]
+#[path = "audio_session_tests.rs"]
+mod session_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3568,13 +3817,13 @@ mod tests {
         }
     }
 
-    struct ConstantOutputModule {
+    pub(super) struct ConstantOutputModule {
         current_id: String,
         value: f32,
     }
 
     impl ConstantOutputModule {
-        fn new(id: &str, value: f32) -> Box<dyn modular_core::types::Sampleable> {
+        pub(super) fn new(id: &str, value: f32) -> Box<dyn modular_core::types::Sampleable> {
             Box::new(Self {
                 current_id: id.to_string(),
                 value,
@@ -3687,7 +3936,14 @@ mod tests {
         }
     }
 
-    fn create_test_processor() -> (CommandProducer, AudioProcessor) {
+    pub(super) fn create_test_processor() -> (CommandProducer, AudioProcessor) {
+        create_processor(44100.0, 1)
+    }
+
+    pub(super) fn create_processor(
+        sample_rate: f32,
+        block_size: usize,
+    ) -> (CommandProducer, AudioProcessor) {
         let (
             cmd_producer,
             cmd_consumer,
@@ -3715,8 +3971,8 @@ mod tests {
             err_producer,
             garbage_producer,
             shared,
-            44100.0,
-            1,
+            sample_rate,
+            block_size,
         );
 
         (cmd_producer, processor)
@@ -4146,7 +4402,14 @@ mod tests {
     /// Construct a fresh, unstarted ROOT_CLOCK at 120 BPM 4/4 (phase 0). The
     /// caller inserts it into a patch; a whole-patch swap then carries any
     /// running clock's phase into it via `transfer_state_from`.
-    fn build_root_clock(block_size: usize) -> Box<dyn modular_core::types::Sampleable> {
+    pub(super) fn build_root_clock(block_size: usize) -> Box<dyn modular_core::types::Sampleable> {
+        build_root_clock_at(44_100.0, block_size)
+    }
+
+    pub(super) fn build_root_clock_at(
+        sample_rate: f32,
+        block_size: usize,
+    ) -> Box<dyn modular_core::types::Sampleable> {
         let id = modular_core::types::ROOT_CLOCK_ID.to_string();
         let constructors = modular_core::dsp::get_constructors();
         let constructor = constructors.get("_clock").expect("_clock constructor");
@@ -4158,7 +4421,7 @@ mod tests {
         .expect("deserialize clock params");
         constructor(
             &id,
-            44_100.0,
+            sample_rate,
             params,
             block_size,
             modular_core::types::ProcessingMode::Sample,
@@ -4168,7 +4431,7 @@ mod tests {
 
     /// Build a real running ROOT_CLOCK, insert it into the live patch, register it
     /// as a message listener, and start it from phase 0. Returns its module id.
-    fn insert_running_root_clock(processor: &mut AudioProcessor) -> String {
+    pub(super) fn insert_running_root_clock(processor: &mut AudioProcessor) -> String {
         let id = modular_core::types::ROOT_CLOCK_ID.to_string();
         let clock = build_root_clock(processor.block_size);
         processor.patch.sampleables.insert(id.clone(), clock);

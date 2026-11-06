@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use crate::audio::{ScopeBuffer, ScopeStash, VuMeterState};
 use crate::link::LinkResources;
+use crate::session_clock::SessionClockConfig;
 
 /// When a queued patch update should be applied.
 #[napi(string_enum)]
@@ -99,6 +100,18 @@ pub struct PatchUpdate {
     /// leaves it false so the clock keeps running uninterrupted.
     pub reset_clock: bool,
 
+    /// Session bar this update applies at: the boundary where the session
+    /// clock's bar number becomes this value. Under a session clock it
+    /// overrides the trigger; otherwise the update's `NextBar` trigger stands.
+    /// With `reset_clock` it also becomes the transport's origin bar.
+    pub at_bar: Option<i64>,
+
+    /// Session bar the transport's bar count runs from once this update
+    /// applies under a session clock, set whether the update lands on time
+    /// or late and whatever `reset_clock` says. Peers that agree on it agree
+    /// on ROOT_CLOCK's bar index.
+    pub origin_bar: Option<i64>,
+
     /// Pre-allocated TLS profiler records map, one entry per constructed module
     /// id. Consumed by `profiling::swap_records` on the audio thread; the
     /// evicted map flows back via the garbage queue. Always populated, even
@@ -128,6 +141,8 @@ impl PatchUpdate {
             sample_rate,
             transport_meta: None,
             reset_clock: false,
+            at_bar: None,
+            origin_bar: None,
             profile_records_seed: HashMap::new(),
             profile_shared_seed: HashMap::new(),
         }
@@ -211,6 +226,16 @@ pub enum GraphCommand {
     /// the resources it holds. Old resources removed by this command are
     /// pushed to the garbage queue so the main thread can drop them safely.
     SetLink(Option<Box<LinkResources>>),
+
+    /// Install, update or remove the session clock. The `HostTimeFilter` is
+    /// built on the main thread; the audio thread keeps its running filter
+    /// when already active and returns the unused one through the garbage
+    /// queue.
+    SetSessionClock(Option<(SessionClockConfig, rusty_link::HostTimeFilter)>),
+
+    /// Transport control: start playback once the session clock reaches this
+    /// bar. Behaves as `Start` without an active session clock.
+    StartAtBar(i64),
 }
 
 /// Error types that can be reported from the audio thread back to the main thread.
@@ -263,6 +288,8 @@ pub enum GarbageItem {
     OrderIds(Vec<String>),
     /// Live Link resources removed from the audio thread.
     Link(Box<LinkResources>),
+    /// Session clock host-time filter removed or left unused by the audio thread.
+    HostTimeFilter(rusty_link::HostTimeFilter),
     /// Profiler records map evicted by `swap_records` / `try_swap_shared`.
     ProfileMap(HashMap<String, ModuleProfileAccum>),
 }
