@@ -20,8 +20,9 @@ const PLAYBACK_ORIGIN = 'playback';
 const REFERENCE_GRACE_MS = 4000;
 
 /**
- * Time an evaluation needs to reach every peer before it plays. Evaluations
- * play on the first whole bar at least this far ahead.
+ * Time an evaluation needs to reach every peer before it plays, on top of
+ * the time peers take to build it. Evaluations play on the first whole bar
+ * at least that far ahead.
  */
 const EVAL_HEADROOM_MICROS = 400_000;
 
@@ -172,17 +173,28 @@ export class SessionPlayback {
         return now === null || !state ? null : barOf(state, now);
     }
 
+    /** Whether this peer can play evaluations to the session yet. */
+    isReady(): boolean {
+        return this.clock.isSynced() && this.timelineState() !== null;
+    }
+
     /**
      * Plan to play a local evaluation of the shared file `fileId` to the
      * session, or null when this peer cannot yet (not in sync, no timeline).
+     * `buildMicros` is how long building the patch took here; other peers
+     * take about as long again, so the target bar leaves room for it.
      */
-    planLocal(fileId: string): LocalEvalPlan | null {
+    planLocal(fileId: string, buildMicros = 0): LocalEvalPlan | null {
         const now = this.clock.sessionNow();
         const state = this.timelineState();
         if (now === null || !state) {
             return null;
         }
-        const atBar = nextTargetBar(state, now, EVAL_HEADROOM_MICROS);
+        const atBar = nextTargetBar(
+            state,
+            now,
+            EVAL_HEADROOM_MICROS + 2 * Math.max(0, buildMicros),
+        );
         const current = this.map.get('current');
         const previous = isSessionEval(current) ? current : null;
         // A different file starts a new song; its bar count starts here.
@@ -249,13 +261,22 @@ export class SessionPlayback {
         if (now - this.referenceMissingSince < REFERENCE_GRACE_MS) {
             return;
         }
-        const smallest = [...present].sort()[0];
+        // A peer in sync carries session time on unbroken; if none is, the
+        // timeline has lost its time base and a new one starts.
+        const synced = [...present].filter((id) =>
+            id === this.self.id ? this.clock.isSynced() : this.clock.isPeerSynced(id),
+        );
+        const candidates = synced.length > 0 ? synced : [...present];
+        const smallest = candidates.sort()[0];
         if (smallest === this.self.id) {
             this.referenceMissingSince = null;
-            this.doc.transact(
-                () => this.map.set('reference', this.self.id),
-                PLAYBACK_ORIGIN,
-            );
+            this.doc.transact(() => {
+                this.map.set('reference', this.self.id);
+                if (synced.length === 0) {
+                    this.map.delete('timeline');
+                }
+            }, PLAYBACK_ORIGIN);
+            this.ensureTimeline();
         }
     }
 
@@ -309,7 +330,18 @@ export class SessionPlayback {
             return;
         }
         this.lastPlayedEvalId = evaluation.id;
-        this.host.playRemote(evaluation);
+        // Building a patch can take a while; it runs after the document
+        // transaction that delivered it has finished.
+        setImmediate(() => {
+            if (this.disposed) {
+                return;
+            }
+            try {
+                this.host.playRemote(evaluation);
+            } catch (error) {
+                console.warn('[session] could not play a peer evaluation', error);
+            }
+        });
     }
 }
 

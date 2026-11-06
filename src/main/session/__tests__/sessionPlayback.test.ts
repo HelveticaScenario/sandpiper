@@ -127,6 +127,18 @@ describe('SessionPlayback', () => {
         expect(other.originBar).toBe(other.atBar);
     });
 
+    it('leaves room for slow builds when choosing the bar', async () => {
+        const session = newTestSession();
+        const host = peer(makeMesh(testnet, session), 'host', 0, 'Ada');
+        await host.mesh.start();
+        await waitFor(() => host.playback.isReady());
+        const quick = host.playback.planLocal('f', 0)!;
+        // At 120 bpm in 4/4 a bar is two seconds; a three-second build on
+        // each side needs at least three more bars.
+        const slow = host.playback.planLocal('f', 3_000_000)!;
+        expect(slow.atBar - quick.atBar).toBeGreaterThanOrEqual(2);
+    });
+
     it('schedules a tempo change on the target bar for everyone', async () => {
         const session = newTestSession();
         const host = peer(makeMesh(testnet, session), 'host', 0, 'Ada');

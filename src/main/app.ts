@@ -66,6 +66,7 @@ import { buildCompatKey } from './session/compat';
 import { SessionController, parseBootstrap } from './session/sessionIpc';
 import { SessionWorkspace } from './session/sessionWorkspace';
 import {
+    type LocalEvalPlan,
     type SessionEval,
     SessionPlayback,
     sessionSourceId,
@@ -1199,13 +1200,19 @@ function inWavWorkspace<T>(load: (path: string) => T): (path: string) => T {
 }
 
 /** Build a patch from DSL source and send it to the engine. */
+/**
+ * Build a patch from DSL source and send it to the engine. `timing` places
+ * it on a live session's timeline; given as a function, it is decided once
+ * the patch is built, from how long the build took.
+ */
 function runPatchScript(
     source: string,
     sourceId: string | undefined,
     trigger: QueuedTrigger | undefined,
-    timing?: SessionTiming,
+    timing?: SessionTiming | ((buildMicros: number) => SessionTiming | null),
 ): DSLExecuteResult {
         try {
+            const buildStart = performance.now();
             const {
                 patch,
                 sourceLocationMap,
@@ -1259,7 +1266,15 @@ function runPatchScript(
                 moduleIdRemap,
                 updateId,
                 video: placedVideo,
-            } = submitPatchUpdate(patch, sourceId, trigger, video, timing);
+            } = submitPatchUpdate(
+                patch,
+                sourceId,
+                trigger,
+                video,
+                (typeof timing === 'function'
+                    ? timing((performance.now() - buildStart) * 1000)
+                    : timing) ?? undefined,
+            );
 
             if (errors.length > 0) {
                 return {
@@ -1311,14 +1326,24 @@ registerIPCHandler(
         const fileId = sharedPath
             ? (sessionWorkspace?.mirror.fileIdAt(sharedPath) ?? null)
             : null;
-        const plan = fileId ? (sessionPlayback?.planLocal(fileId) ?? null) : null;
-        if (!plan) {
+        const playback = sessionPlayback;
+        if (!fileId || !playback?.isReady()) {
             return runPatchScript(source, sourceId, trigger);
         }
-        const result = runPatchScript(source, plan.sourceId, undefined, plan);
-        if (result.success && result.appliedPatch) {
-            sessionPlayback?.publishLocal(plan, source, result.appliedPatch);
+        // The bar is chosen after the build, so a slow build cannot make
+        // this peer miss the bar everyone else plays on.
+        const planned: { plan: LocalEvalPlan | null } = { plan: null };
+        const result = runPatchScript(
+            source,
+            sessionSourceId(fileId),
+            undefined,
+            (buildMicros) => (planned.plan = playback.planLocal(fileId, buildMicros)),
+        );
+        const { plan } = planned;
+        if (!plan || !result.success || !result.appliedPatch) {
+            return result;
         }
+        playback.publishLocal(plan, source, result.appliedPatch);
         return {
             ...result,
             sessionAtBar: plan.atBar,

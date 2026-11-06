@@ -2020,19 +2020,6 @@ function App() {
                               : undefined,
                       );
                 lastPatchResultRef.current = result;
-                const session = sessionSelfRef.current;
-                if (
-                    !remote &&
-                    result.sessionAtBar !== undefined &&
-                    result.sessionOriginBar !== undefined &&
-                    session.status === 'active'
-                ) {
-                    announceSessionChange(
-                        session.self,
-                        result.sessionAtBar,
-                        result.sessionOriginBar,
-                    );
-                }
 
                 if (!result.success) {
                     // Still set interpolation resolutions even on validation errors
@@ -2067,6 +2054,26 @@ function App() {
                         );
                     }
                     return;
+                }
+
+                // Only a change that will play is announced.
+                const session = sessionSelfRef.current;
+                if (remote) {
+                    announceSessionChange(
+                        remote.author,
+                        remote.atBar,
+                        remote.originBar,
+                    );
+                } else if (
+                    result.sessionAtBar !== undefined &&
+                    result.sessionOriginBar !== undefined &&
+                    session.status === 'active'
+                ) {
+                    announceSessionChange(
+                        session.self,
+                        result.sessionAtBar,
+                        result.sessionOriginBar,
+                    );
                 }
 
                 const previousRunning = {
@@ -2328,14 +2335,9 @@ function App() {
     useEffect(
         () =>
             electronAPI.session.onRemoteEval((event) => {
-                announceSessionChange(
-                    event.author,
-                    event.atBar,
-                    event.originBar,
-                );
                 handleSubmitRef.current(undefined, event);
             }),
-        [announceSessionChange],
+        [],
     );
 
     // Expose test API for E2E tests

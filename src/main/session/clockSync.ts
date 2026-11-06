@@ -33,6 +33,8 @@ export interface ClockSyncOptions {
 
 const SAMPLE_WINDOW = 12;
 const FAST_SAMPLES = 8;
+/** Samples needed from a new target before an existing offset moves. */
+const MIN_SAMPLES_TO_MOVE = 3;
 /** Offset changes smaller than this are not worth retuning the engine. */
 const OFFSET_EPSILON_MICROS = 500;
 
@@ -47,8 +49,8 @@ type ClockMessage =
     | { t: 'clock-alive'; synced: boolean };
 
 export interface ClockSyncEvents {
-    /** The offset was set or moved noticeably; null when sync was lost. */
-    offset: [offset: number | null];
+    /** The offset was set or moved noticeably. */
+    offset: [offset: number];
     /** The set of present peers changed. */
     presence: [];
 }
@@ -116,6 +118,11 @@ export class ClockSync extends EventEmitter<ClockSyncEvents> {
     /** Session time now, or null before sync. */
     sessionNow(): number | null {
         return this.offset === null ? null : this.options.now() + this.offset;
+    }
+
+    /** Whether `peerId` said in its last heartbeat that it is in sync. */
+    isPeerSynced(peerId: string): boolean {
+        return this.seen.get(peerId)?.synced ?? false;
     }
 
     getReference(): string | null {
@@ -219,6 +226,11 @@ export class ClockSync extends EventEmitter<ClockSyncEvents> {
         this.samples.push({ offset: message.ts - (message.t0 + t3) / 2, rtt });
         if (this.samples.length > SAMPLE_WINDOW) {
             this.samples.shift();
+        }
+        // After switching to a new target, a single sample may carry most of
+        // a round trip of error; keep the offset in force until a few agree.
+        if (this.offset !== null && this.samples.length < MIN_SAMPLES_TO_MOVE) {
+            return;
         }
         const best = this.samples.reduce((a, b) => (b.rtt < a.rtt ? b : a));
         this.setOffset(best.offset);
