@@ -26,6 +26,7 @@ import {
     renderOutOptionsJsDocList,
     renderOutOptionsMembers,
 } from '../../shared/dsl/outOptions';
+import { GLIDE_CURVES, GLIDE_MODES, literalUnion } from './glideCurves';
 export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
@@ -349,18 +350,18 @@ type BufferOutputRef = {
 
 /**
  * Any pattern value: \`$p(...)\`, \`$p.s(...)\`, \`$p.arrange(...)\`, or a
- * \`.fast\`/\`.slow\`/\`.struct\`/\`.beat\` chain. Signal params accept one and
- * play it through a \`$cycle\`.
+ * \`.fast\`/\`.slow\`/\`.struct\`/\`.beat\`/\`.glide\` chain. Signal params
+ * accept one and play it through a \`$cycle\`.
  */
-type PatternSource = ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern | StructPattern | BeatPattern;
+type PatternSource = ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern | StructPattern | BeatPattern | GlidePattern;
 
 type DropFirst<T extends unknown[]> = T extends [unknown, ...infer R] ? R : never;
 
 /**
  * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
  * \`$cycle\` as its pattern argument. Opaque to user code; construct with
- * \`$p(...)\` and chain \`.fast\`/\`.slow\`/\`.struct\`/\`.beat\`. Never build one
- * by hand.
+ * \`$p(...)\` and chain \`.fast\`/\`.slow\`/\`.struct\`/\`.beat\`/\`.glide\`.
+ * Never build one by hand.
  */
 type ParsedPattern = {
   /**
@@ -412,6 +413,24 @@ type ParsedPattern = {
    * \`\`\`
    */
   beat(t: number | string, div: number | string): BeatPattern;
+  /**
+   * Give each note a glide (portamento) of \`g\` cycles. \`$cycle\` ramps
+   * its CV from the previous pitch, starting \`g\` cycles before the
+   * note's onset and arriving on it. \`g\` is sampled at each onset;
+   * \`0\` jumps. It is a constant or a mini-notation number pattern. With
+   * several voices, each gliding note takes the nearest-pitched voice that is
+   * free at its onset.
+   *
+   * \`curve\` shapes the ramp (default \`'linear'\`) and \`mode\` picks
+   * which end it eases: \`'in'\` (default), \`'out'\` or \`'inOut'\`.
+   * Every curve stays between the two pitches.
+   *
+   * \`\`\`js
+   * $sine($p("c4 e4 g4").glide("0 0.1 0.25")).out()
+   * $sine($p("c3 g3").glide(0.25, 'expo', 'out')).out()
+   * \`\`\`
+   */
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /**
    * Shorthand for \`$cycle(pattern, ...rest)\`: plays this pattern with a
    * \`$cycle\` sequencer. Accepts the same arguments as \`$cycle\` after its
@@ -611,7 +630,7 @@ function s(source: string, scale: string): SpPattern;
  * @param sections \`[cycles, pattern]\` tuples, in play order
  */
 function arrange(
-  ...sections: [number, ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern | StructPattern | BeatPattern][]
+  ...sections: [number, ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern | StructPattern | BeatPattern | GlidePattern][]
 ): ArrangePattern;
 }
 
@@ -638,8 +657,8 @@ type SpCombineBuilder = ((rhs: string) => SpPattern) & {
 /**
  * Chainable scale-degree pattern returned by \`$p.s()\`. Pass directly to
  * \`$cycle\`'s \`pattern\` param, or chain \`.add\`/\`.sub\`/\`.fast\`/\`.slow\`/
- * \`.struct\`/\`.beat\`. Opaque to user code — chain methods return fresh
- * patterns.
+ * \`.struct\`/\`.beat\`/\`.glide\`. Opaque to user code — chain methods return
+ * fresh patterns.
  */
 type SpPattern = {
   add: SpCombineBuilder;
@@ -652,6 +671,8 @@ type SpPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -671,6 +692,8 @@ type ArrangePattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this arrangement at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -690,6 +713,8 @@ type FastPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -707,6 +732,8 @@ type SlowPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -731,6 +758,8 @@ type StructPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
@@ -755,6 +784,36 @@ type BeatPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at other beats. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
+};
+
+/** Shape of a glide ramp. See \`$p(...).glide\`. */
+type GlideCurve = ${literalUnion(GLIDE_CURVES)};
+
+/** Which end of a glide ramp its curve eases. See \`$p(...).glide\`. */
+type GlideMode = ${literalUnion(GLIDE_MODES)};
+
+/**
+ * A gliding pattern returned by \`pattern.glide(g, curve, mode)\`: \`$cycle\` ramps into
+ * each note over \`g\` cycles. Pass directly to \`$cycle\`'s \`pattern\`
+ * param, nest it as an \`$p.arrange(...)\` section, or chain further pattern
+ * methods. Opaque to user code — construct with \`.glide(...)\`; never build
+ * one by hand.
+ */
+type GlidePattern = {
+  /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+  /** Impose a boolean rhythmic structure. See \`$p(...).struct\`. */
+  struct(boolPattern: string): StructPattern;
+  /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
+  beat(t: number | string, div: number | string): BeatPattern;
+  /** Glide into each note over \`g\` cycles. See \`$p(...).glide\`. */
+  glide(g: number | string, curve?: GlideCurve, mode?: GlideMode): GlidePattern;
   /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
   cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };

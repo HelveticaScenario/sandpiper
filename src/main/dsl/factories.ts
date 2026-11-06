@@ -98,7 +98,7 @@ function isArrangePatternLike(
 
 /**
  * Structural check for a `.fast(...)` / `.slow(...)` / `.struct(...)` /
- * `.beat(...)` wrapper. Like `SpPattern` and `ArrangePattern`, it carries a
+ * `.beat(...)` / `.glide(...)` wrapper. Like `SpPattern` and `ArrangePattern`, it carries a
  * flat `argument_spans[i]` list — the wrapped pattern's per-source spans —
  * used to map runtime per-source highlights back to editor literals.
  */
@@ -112,7 +112,8 @@ function isPatternWrapperLike(
         value.__kind === 'FastPattern' ||
         value.__kind === 'SlowPattern' ||
         value.__kind === 'StructPattern' ||
-        value.__kind === 'BeatPattern'
+        value.__kind === 'BeatPattern' ||
+        value.__kind === 'GlidePattern'
     );
 }
 

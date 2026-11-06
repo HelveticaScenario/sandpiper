@@ -22215,6 +22215,66 @@
             "factor"
           ]
         },
+        "GlideCurve": {
+          "description": "Shape of a glide ramp.",
+          "type": "string",
+          "enum": [
+            "linear",
+            "sine",
+            "quad",
+            "cubic",
+            "quart",
+            "quint",
+            "expo",
+            "circ",
+            "bounce"
+          ]
+        },
+        "GlideKindTag": {
+          "description": "Phantom discriminator matching the literal `\"GlidePattern\"` string.",
+          "type": "string",
+          "enum": [
+            "GlidePattern"
+          ]
+        },
+        "GlideMode": {
+          "description": "Which end of the ramp the curve eases. `Linear` ignores it.",
+          "type": "string",
+          "enum": [
+            "in",
+            "out",
+            "inOut"
+          ]
+        },
+        "GlidePatternPayload": {
+          "description": "JSON payload for `$p(...).glide(length, curve, mode)`: give each note of\n`pattern` a CV ramp `length` cycles long that ends on its onset, shaped by\n`curve` eased at `mode`'s end. `length` follows [`FactorPayload`]'s\nconst-vs-pattern duality and is sampled at each onset; negative lengths\njump.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.glide` sets this so the `SeqPatternSource`\nuntagged enum picks the `Glide` variant.",
+              "$ref": "#/$defs/GlideKindTag"
+            },
+            "curve": {
+              "$ref": "#/$defs/GlideCurve",
+              "default": "linear"
+            },
+            "length": {
+              "$ref": "#/$defs/FactorPayload"
+            },
+            "mode": {
+              "$ref": "#/$defs/GlideMode",
+              "default": "in"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "length"
+          ]
+        },
         "InfinityTag": {
           "description": "Phantom discriminator matching the literal `\"Infinity\"` string.",
           "type": "string",
@@ -23861,6 +23921,9 @@
             },
             {
               "$ref": "#/$defs/BeatPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/GlidePatternPayload"
             },
             {
               "$ref": "#/$defs/ArrangePatternPayload"

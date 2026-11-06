@@ -22,6 +22,12 @@ import { collectLeafSpans } from './collectLeafSpans';
 import { MiniParseError, parseMini } from './parser';
 import { captureSourceLocation } from '../captureSourceLocation';
 import { lookupArgumentSpan } from '../factories';
+import {
+    GLIDE_CURVES,
+    GLIDE_MODES,
+    type GlideCurve,
+    type GlideMode,
+} from '../glideCurves';
 
 export type { MiniAST, ParsedPattern } from './ast';
 export { MiniParseError } from './parser';
@@ -302,7 +308,8 @@ export type SectionPattern =
     | FastPattern
     | SlowPattern
     | StructPattern
-    | BeatPattern;
+    | BeatPattern
+    | GlidePattern;
 
 /** One `[cycles, pattern]` tuple accepted by `$p.arrange`. */
 export type ArrangeSectionArg = readonly [number, SectionPattern];
@@ -415,17 +422,18 @@ function $arrangeImpl(
     });
 }
 
-// ─── .fast / .slow / .struct / .beat (modifiers on every pattern) ───────
+// ─── .fast / .slow / .struct / .beat / .glide (modifiers on every pattern)
 
 /** Discriminator strings the Rust `SeqPatternSource` untagged enum matches. */
 const FAST_KIND = 'FastPattern' as const;
 const SLOW_KIND = 'SlowPattern' as const;
 const STRUCT_KIND = 'StructPattern' as const;
 const BEAT_KIND = 'BeatPattern' as const;
+const GLIDE_KIND = 'GlidePattern' as const;
 
 /**
- * The `.fast(...)` / `.slow(...)` / `.struct(...)` / `.beat(...)` methods
- * attached (non-enumerably) to every pattern object, mirroring Strudel.
+ * The `.fast(...)` / `.slow(...)` / `.struct(...)` / `.beat(...)` /
+ * `.glide(...)` methods attached (non-enumerably) to every pattern object, mirroring Strudel.
  *
  * `.fast`/`.slow`: the factor is a constant (`2`) or a mini-notation number
  * pattern (`"2 4"` → ×2 then ×4 across the cycle). A non-positive factor
@@ -443,6 +451,13 @@ const BEAT_KIND = 'BeatPattern' as const;
  * matching Strudel. Both arguments accept a constant number or a
  * mini-notation number pattern.
  *
+ * `.glide`: gives each note a glide length in cycles. `$cycle` ramps its CV
+ * from the previous pitch, starting that many cycles before the note's onset
+ * and arriving on it. Sampled at each onset; `0` jumps. Accepts a constant
+ * number or a mini-notation number pattern. An optional curve (default
+ * `'linear'`) and mode (`'in'`, `'out'` or `'inOut'`, default `'in'`) shape
+ * the ramp.
+ *
  * `.cycle(...rest)`: shorthand for `$cycle(pattern, ...rest)`, forwarding
  * every argument after the pattern to the `$cycle` factory.
  */
@@ -455,6 +470,11 @@ export interface TimeModifiable {
         t: number | string,
         div: number | string,
     ): BeatPattern & TimeModifiable;
+    glide(
+        g: number | string,
+        curve?: GlideCurve,
+        mode?: GlideMode,
+    ): GlidePattern & TimeModifiable;
 }
 
 /**
@@ -535,6 +555,21 @@ export interface BeatPattern {
     argument_spans: Array<SourceSpan>;
 }
 
+/**
+ * Wire shape for `pattern.glide(g, curve, mode)`. Recognised by the Rust `SeqPatternSource`
+ * untagged enum via `__kind === 'GlidePattern'`. `length` follows
+ * {@link FastPattern.factor}'s const-vs-pattern duality and, as a string,
+ * appends its span after the wrapped pattern's.
+ */
+export interface GlidePattern {
+    __kind: typeof GLIDE_KIND;
+    pattern: SectionPattern;
+    length: number | ParsedPatternPayload;
+    curve: GlideCurve;
+    mode: GlideMode;
+    argument_spans: Array<SourceSpan>;
+}
+
 /** Type guard for runtime `StructPattern` checks. */
 export function isStructPattern(value: unknown): value is StructPattern {
     return (
@@ -552,6 +587,16 @@ export function isBeatPattern(value: unknown): value is BeatPattern {
         value !== null &&
         '__kind' in value &&
         value.__kind === BEAT_KIND
+    );
+}
+
+/** Type guard for runtime `GlidePattern` checks. */
+export function isGlidePattern(value: unknown): value is GlidePattern {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        '__kind' in value &&
+        value.__kind === GLIDE_KIND
     );
 }
 
@@ -573,19 +618,20 @@ function collectPatternSpans(
         isFastPattern(pattern) ||
         isSlowPattern(pattern) ||
         isStructPattern(pattern) ||
-        isBeatPattern(pattern)
+        isBeatPattern(pattern) ||
+        isGlidePattern(pattern)
     ) {
         return [...pattern.argument_spans];
     }
     throw new MiniParseError(
         `${context}: pattern must be a $p(...), $p.s(...), $p.arrange(...), ` +
-            `or .fast(...)/.slow(...)/.struct(...)/.beat(...) value`,
+            `or .fast(...)/.slow(...)/.struct(...)/.beat(...)/.glide(...) value`,
     );
 }
 
 /**
  * Build the wire payload for a numeric pattern-method argument (`.fast`/
- * `.slow` factor, `.beat` t/div). A number is carried as a raw constant (not
+ * `.slow` factor, `.beat` t/div, `.glide` length). A number is carried as a raw constant (not
  * a highlightable source); a string is parsed as full mini-notation (`"2 4"`,
  * `"<1 2>"`, …) into a `ParsedPatternPayload` that the Rust side lowers to a
  * `Pattern<Fraction>` and highlights.
@@ -628,6 +674,37 @@ function makeSlow(
         pattern: inner,
         factor: factorPayload(factor, 'slow'),
         argument_spans: factorArgumentSpans(inner, factor, 'slow'),
+    });
+}
+
+/** Throw unless `value` is one of `allowed`. */
+function expectOneOf<T extends string>(
+    value: unknown,
+    allowed: ReadonlyArray<T>,
+    what: string,
+): T {
+    if (!allowed.includes(value as T)) {
+        throw new MiniParseError(
+            `glide() ${what} must be one of ${allowed.map((a) => `'${a}'`).join(', ')}, got ${JSON.stringify(value)}`,
+        );
+    }
+    return value as T;
+}
+
+/** Build a `GlidePattern` wrapper around `inner`. */
+function makeGlide(
+    inner: SectionPattern,
+    g: number | string,
+    curve: GlideCurve = 'linear',
+    mode: GlideMode = 'in',
+): GlidePattern & TimeModifiable {
+    return attachTimeModifiers({
+        __kind: GLIDE_KIND,
+        pattern: inner,
+        length: factorPayload(g, 'glide'),
+        curve: expectOneOf(curve, GLIDE_CURVES, 'curve'),
+        mode: expectOneOf(mode, GLIDE_MODES, 'mode'),
+        argument_spans: factorArgumentSpans(inner, g, 'glide'),
     });
 }
 
@@ -695,14 +772,15 @@ function makeBeat(
 function factorArgumentSpans(
     inner: SectionPattern,
     factor: number | string,
-    methodName: 'fast' | 'slow',
+    methodName: 'fast' | 'slow' | 'glide',
 ): SourceSpan[] {
     const innerSpans = collectPatternSpans(inner, `$p(...).${methodName}()`);
     if (typeof factor !== 'string') {
         return innerSpans;
     }
     const loc = captureSourceLocation();
-    const factorSpan = lookupArgumentSpan(loc, 'factor') ?? {
+    const argName = methodName === 'glide' ? 'g' : 'factor';
+    const factorSpan = lookupArgumentSpan(loc, argName) ?? {
         start: 0,
         end: 0,
     };
@@ -732,7 +810,7 @@ function makeCycle(pattern: SectionPattern, rest: unknown[]): unknown {
 
 /**
  * Attach the `.cycle(...)` / `.fast(...)` / `.slow(...)` / `.struct(...)` /
- * `.beat(...)` methods to a pattern object. `Object.assign` types the result; the
+ * `.beat(...)` / `.glide(...)` methods to a pattern object. `Object.assign` types the result; the
  * `defineProperty` calls then flip the methods to non-enumerable so
  * `JSON.stringify` (the IPC clone) and `Object.keys`/`entries` skip them and
  * only the wire-shape fields cross the boundary — the same trick `$p.s` uses
@@ -748,12 +826,15 @@ function attachTimeModifiers<T extends SectionPattern>(
         struct: (boolPattern: string) => makeStruct(pattern, boolPattern),
         beat: (t: number | string, div: number | string) =>
             makeBeat(pattern, t, div),
+        glide: (g: number | string, curve?: GlideCurve, mode?: GlideMode) =>
+            makeGlide(pattern, g, curve, mode),
     });
     Object.defineProperty(modifiable, 'cycle', { enumerable: false });
     Object.defineProperty(modifiable, 'fast', { enumerable: false });
     Object.defineProperty(modifiable, 'slow', { enumerable: false });
     Object.defineProperty(modifiable, 'struct', { enumerable: false });
     Object.defineProperty(modifiable, 'beat', { enumerable: false });
+    Object.defineProperty(modifiable, 'glide', { enumerable: false });
     return modifiable;
 }
 

@@ -13,6 +13,8 @@ use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
 pub(crate) mod cache;
 pub mod drum_map;
+mod glide;
+pub mod glide_curve;
 pub mod groove;
 pub mod highlight;
 pub mod interval_value;
