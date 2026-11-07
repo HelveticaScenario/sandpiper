@@ -31,8 +31,9 @@ const MAX_FADE_MS: f64 = 1000.0;
 #[deserr(rename_all = camelCase, deny_unknown_fields, validate = sampler_validate_params -> ModuleParamErrors)]
 struct SamplerParams {
     wav: Wav,
-    /// Gate input — rising edge starts playback of the selected window;
-    /// with `loop`, holding it high keeps it repeating.
+    /// Gate input — rising edge starts playback of the selected window,
+    /// which sounds while the gate stays high; with `loop`, holding it high
+    /// keeps it repeating.
     #[signal(type = gate, range = (0.0, 5.0))]
     gate: MonoSignal,
     /// Playback speed. 1.0 = normal, 2.0 = double speed, negative = reverse.
@@ -48,7 +49,7 @@ struct SamplerParams {
     #[deserr(default)]
     slice: Option<SliceParam>,
     /// Declick fade in milliseconds: fade-in at onset, fade-out at the window
-    /// exit edge, and retrigger crossfade. 0 disables.
+    /// exit edge and when the gate falls, and retrigger crossfade. 0 disables.
     #[serde(default = "default_fade")]
     #[deserr(default = default_fade())]
     fade: f64,
@@ -57,7 +58,8 @@ struct SamplerParams {
     /// starts on time, so passes never drift. With a fade, the crossfade
     /// uses the audio just before the next window (after it in reverse),
     /// topped up by letting the old pass run on past its end. When the gate
-    /// falls or the next slice is empty, the current pass plays out.
+    /// falls, playback fades out over `fade`; when `loop` turns off or the
+    /// next slice is empty, the current pass plays out.
     #[serde(default, rename = "loop")]
     #[deserr(default, rename = "loop")]
     looping: bool,
@@ -105,30 +107,31 @@ struct SamplerState {
     /// Declick ramp width in WAV frames (fade seconds × wav rate).
     /// Param+wav-derived, so computed in on_patch_update; 0 disables fades.
     fade_frames: f64,
-    /// Retrigger release-voice ramp length in output samples (fade seconds ×
+    /// Timed release-voice ramp length in output samples (fade seconds ×
     /// engine rate). Param-derived, so computed in on_patch_update.
     fade_out_samples: u32,
     rels: [Release; RELEASE_SLOTS],
     /// The main pass ends at its window edge instead of repeating: always
-    /// for a one-shot, and for a loop pass once the gate falls, `loop` turns
-    /// off, or the next slice is empty. Its closing fade is set when this
-    /// becomes true. A gate still holding a loop open starts a new pass once
-    /// this one is done.
+    /// for a one-shot, and for a loop pass once `loop` turns off or the next
+    /// slice is empty. Its closing fade is set when this becomes true. A
+    /// gate still holding a loop open starts a new pass once this one is
+    /// done.
     playing_out: bool,
 }
 
-/// One-shot sample player. Each gate rising edge starts playback of the whole
-/// file, or of one slice when `slice` is set: the slice signal is sampled at
-/// the edge — integer part picks the slice point (wrapping), fraction offsets
-/// the start into it. Speed control allows pitch-shifting and reverse
-/// playback (a slice plays the same region backwards). A short `fade`
-/// (milliseconds) declicks onsets, slice ends, and retriggers. With `loop`,
-/// the window repeats for as long as the gate stays high, picking the slice
-/// again for each repeat.
+/// Gated sample player. Each gate rising edge starts playback of the whole
+/// file, or of one slice when `slice` is set; it plays until it ends or the
+/// gate falls. The slice signal is sampled at the edge: integer part picks
+/// the slice point (wrapping), fraction offsets the start into it. Speed
+/// control allows pitch-shifting and reverse playback (a slice plays the
+/// same region backwards). A short `fade` (milliseconds) declicks onsets,
+/// slice ends, gate releases, and retriggers. With `loop`, the window
+/// repeats for as long as the gate stays high, picking the slice again for
+/// each repeat.
 ///
 /// ```js
-/// $sampler($wavs().kick, $pulse('4hz'))
-/// $sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })
+/// $sampler($wavs().kick, $pulse('2hz'))
+/// $sampler($wavs().pad, $pulse('1hz'), { speed: 0.5 })
 /// $sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })
 /// $sampler($wavs().pad, $pulse('0.5hz'), { loop: true, fade: 10 })
 /// ```
@@ -163,19 +166,14 @@ impl Sampler {
         let (gate_high, edge) = self.state.gate_trigger.process_with_edge(gate_val);
         let speed = self.params.speed.value_or(1.0) as f64;
         let advance = speed * self.state.rate_ratio;
+        // `playing` lags the position by one sample (the span-exit check
+        // runs after edge detection), so also require the position to still
+        // be in the span: an exited voice is silent and must not displace a
+        // live release.
+        if edge.is_falling() && self.state.playing && self.state.main.in_span() {
+            self.release(advance, max_frame);
+        }
         if edge.is_rising() {
-            // Demote the current voice to a release voice so the jump to
-            // the new onset crossfades instead of clicking. `playing` lags
-            // the position by one sample (the span-exit check runs after
-            // edge detection), so also require the position to still be in
-            // the span: an exited voice is silent and must not displace a
-            // live release. The gate was low on the previous sample, so a
-            // loop pass already has its closing fade.
-            if self.state.playing && self.state.main.in_span() && self.state.fade_out_samples > 0 {
-                let release =
-                    Release::new(self.state.main, true, self.state.fade_out_samples, advance);
-                push_release(&mut self.state.rels, release);
-            }
             let (lo, hi) = self.window(frame_count, max_frame);
             self.start_pass(lo, hi, speed, max_frame);
         }
@@ -273,6 +271,25 @@ impl Sampler {
         }
         self.state.playing = true;
         self.state.playing_out = !self.params.looping;
+    }
+
+    /// The gate fell: the main pass becomes a release voice that fades out
+    /// over the fade time, or sooner at the window edge of a pass already
+    /// playing out, so a retrigger crossfades with it. A silent voice has
+    /// nothing to release and must not displace a live release.
+    fn release(&mut self, advance: f64, max_frame: f64) {
+        self.state.playing = false;
+        let mut voice = self.state.main;
+        let fade = self.state.fade_frames;
+        let gain = voice.gain(fade);
+        if gain <= 0.0 {
+            return;
+        }
+        voice.fade_out(advance >= 0.0, fade, max_frame, self.state.playing_out);
+        push_release(
+            &mut self.state.rels,
+            Release::gate(voice, gain, self.state.fade_out_samples),
+        );
     }
 
     /// The playback window in WAV frames for the slice signal's current

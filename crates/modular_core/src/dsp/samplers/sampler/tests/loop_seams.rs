@@ -38,7 +38,7 @@ fn loop_repeats_in_reverse() {
 }
 
 #[test]
-fn loop_plays_out_and_stops_when_gate_falls() {
+fn loop_stops_when_gate_falls() {
     let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
     let mut sampler = make_direct(
         params_with(json!({ "gate": 5.0, "fade": 0.0, "loop": true })),
@@ -47,10 +47,9 @@ fn loop_plays_out_and_stops_when_gate_falls() {
     let out = run(&mut sampler, 5);
     assert_close(&out, &[1.0, 2.0, 3.0, 4.0, 1.0]);
     set_gate(&mut sampler, 0.0);
-    // The current pass finishes (the window end reads on into the file
-    // start), then the voice stops instead of wrapping.
-    let out = run(&mut sampler, 6);
-    assert_close(&out, &[2.0, 3.0, 4.0, 1.0, 0.0, 0.0]);
+    // Without a fade, playback stops on the sample the gate falls.
+    let out = run(&mut sampler, 4);
+    assert_close(&out, &[0.0, 0.0, 0.0, 0.0]);
     assert!(!sampler.state.playing);
 }
 
