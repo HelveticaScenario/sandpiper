@@ -32,6 +32,7 @@ function makeSnapshot(
         linkPeers: 0,
         linkPhase: 0,
         linkPendingStart: false,
+        linkBars: 0,
         ...overrides,
     };
 }

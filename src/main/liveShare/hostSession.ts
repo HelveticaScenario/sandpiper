@@ -1,6 +1,7 @@
 /**
  * The host side of a live share session: a TCP server guests join with the
- * pairing code, and the list of who is in the session.
+ * pairing code, the list of who is in the session, and the session clock
+ * heartbeat.
  */
 import { createServer, type AddressInfo, type Server, type Socket } from 'net';
 import { networkInterfaces } from 'os';
@@ -9,7 +10,12 @@ import type { SessionPeer } from '../../shared/liveShare';
 import { generatePairingCode } from './pairingCode';
 import type { GuestMessage, HostMessage } from './protocol';
 import { acceptGuest, type MessageChannel } from './secureChannel';
+import { HostClock } from './sessionClock';
+import { startLink, type SessionEngine } from './sessionEngine';
 import { peerColor } from './peerColors';
+
+/** How often the host broadcasts its session position. */
+export const CLOCK_HEARTBEAT_MS = 250;
 
 /** Failed pairing attempts one address may make per window. */
 const MAX_FAILED_ATTEMPTS = 5;
@@ -35,25 +41,35 @@ export class HostSession {
     private readonly server: Server;
     private readonly guests = new Map<string, Guest>();
     private readonly failedAttempts = new Map<string, number[]>();
+    private readonly clock: HostClock;
+    private heartbeat: NodeJS.Timeout | null = null;
     private nextColor = 1;
 
     private constructor(
+        private readonly engine: SessionEngine,
         private readonly hostName: string,
         private readonly events: HostSessionEvents,
     ) {
+        this.clock = new HostClock(engine.transport().linkBars, Date.now());
         this.server = createServer((socket) => void this.admit(socket));
     }
 
     /** Open a session on an OS-chosen port, on every interface. */
     static async open(
+        engine: SessionEngine,
         hostName: string,
         events: HostSessionEvents,
     ): Promise<HostSession> {
-        const session = new HostSession(hostName, events);
+        await startLink(engine);
+        const session = new HostSession(engine, hostName, events);
         await new Promise<void>((resolve, reject) => {
             session.server.once('error', reject);
             session.server.listen(0, () => resolve());
         });
+        session.heartbeat = setInterval(
+            () => session.tick(),
+            CLOCK_HEARTBEAT_MS,
+        );
         return session;
     }
 
@@ -87,11 +103,24 @@ export class HostSession {
     }
 
     close(): void {
+        if (this.heartbeat) {
+            clearInterval(this.heartbeat);
+        }
         for (const guest of this.guests.values()) {
             guest.channel.close('The host ended the session');
         }
         this.guests.clear();
         this.server.close();
+    }
+
+    private sessionBars(): number {
+        return this.engine.transport().linkBars + this.clock.offset;
+    }
+
+    private tick(): void {
+        const { linkBars, bpm } = this.engine.transport();
+        this.clock.sample(linkBars, bpm, Date.now());
+        this.broadcast({ sessionBars: this.sessionBars(), t: 'clock' });
     }
 
     private async admit(socket: Socket): Promise<void> {

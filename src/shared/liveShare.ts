@@ -2,7 +2,8 @@
  * Live share session state as the renderer sees it.
  *
  * One peer hosts: its workspace and its files are the session's. Guests on
- * the local network join with the host's pairing code.
+ * the local network join with the host's pairing code. Every peer runs its
+ * own audio engine, kept in time with the host's over Ableton Link.
  */
 
 export interface SessionPeer {
@@ -38,6 +39,8 @@ export type LiveShareStatus =
           selfId: string;
           hostName: string;
           peers: SessionPeer[];
+          /** Whether this peer's bar numbers agree with the host's yet. */
+          clockSynced: boolean;
       };
 
 export interface JoinSessionRequest {

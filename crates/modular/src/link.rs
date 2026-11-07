@@ -197,6 +197,13 @@ impl LinkState {
         Some((phase / buffer.quantum, buffer.tempo))
     }
 
+    /// Link bars (beats / quantum) at the start of the current buffer.
+    pub fn buffer_bars(&self) -> Option<f64> {
+        let buffer = self.buffer.as_ref()?;
+        let ss = self.session_state.as_ref()?;
+        Some(ss.beat_at_time(buffer.host_time_micros, buffer.quantum) / buffer.quantum)
+    }
+
     /// Push an explicit tempo override to the Link session via the RT-safe
     /// capture/commit pair.
     pub fn set_tempo_now(&mut self, tempo: f64) {
@@ -255,6 +262,9 @@ impl LinkState {
                 }
             }
             meter.write_link_pending_start(self.pending_start);
+            if let Some(bars) = self.buffer_bars() {
+                meter.write_link_bars(bars);
+            }
         } else {
             meter.write_link_pending_start(false);
         }
@@ -279,6 +289,18 @@ mod tests {
         });
         state.pending_start = true;
         state
+    }
+
+    #[test]
+    fn buffer_bars_counts_link_beats_in_bars() {
+        let link = AblLink::new(120.0);
+        let mut ss = SessionState::new();
+        link.capture_app_session_state(&mut ss);
+        let t0 = link.clock_micros();
+        ss.force_beat_at_time(0.0, t0, QUANTUM);
+        // Ten beats at 120 BPM.
+        let state = armed_state(link, ss, t0 + 5_000_000);
+        assert!((state.buffer_bars().unwrap() - 2.5).abs() < 1e-6);
     }
 
     #[test]

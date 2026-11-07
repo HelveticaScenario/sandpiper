@@ -505,6 +505,10 @@
     overflow: hidden;
 }
 
+.transport-link:disabled {
+    cursor: default;
+}
+
 .transport-link.active {
     background: transparent;
     color: var(--accent-primary, #ff764d);

@@ -2,9 +2,14 @@ import { useTransport } from '../app/transportStore';
 
 interface TransportDisplayProps {
     onToggleLink?: (enabled: boolean) => void;
+    /** Link cannot be turned off, as during a live share session. */
+    linkLocked?: boolean;
 }
 
-export function TransportDisplay({ onToggleLink }: TransportDisplayProps) {
+export function TransportDisplay({
+    onToggleLink,
+    linkLocked = false,
+}: TransportDisplayProps) {
     // Subscribes directly to the per-frame transport store, so only this
     // component re-renders on each frame — not the App tree.
     const transport = useTransport();
@@ -70,10 +75,11 @@ export function TransportDisplay({ onToggleLink }: TransportDisplayProps) {
             {/* Link toggle with phase indicator */}
             <button
                 className={`transport-link${transport.linkEnabled ? ' active' : ''}`}
+                disabled={linkLocked && transport.linkEnabled}
                 onClick={() => onToggleLink?.(!transport.linkEnabled)}
                 title={
                     transport.linkEnabled
-                        ? `Link active (${transport.linkPeers} peer${transport.linkPeers !== 1 ? 's' : ''})`
+                        ? `Link active (${transport.linkPeers} peer${transport.linkPeers !== 1 ? 's' : ''})${linkLocked ? ' — stays on during a live share session' : ''}`
                         : 'Enable Ableton Link'
                 }
             >

@@ -385,6 +385,13 @@ export interface TransportSnapshot {
    * flipping `is_playing`. Only meaningful when `link_enabled` is true.
    */
   linkPendingStart: boolean
+  /**
+   * Position on this peer's Link timeline in bars (beats / 4) at the start
+   * of the latest audio buffer. Peers' positions differ by whole bars; a
+   * live session uses the difference to share bar numbers. Only meaningful
+   * when `link_enabled` is true.
+   */
+  linkBars: number
 }
 
 /**

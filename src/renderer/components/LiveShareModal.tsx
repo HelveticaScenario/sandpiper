@@ -221,6 +221,11 @@ function SessionView({
             ) : (
                 <section className="live-share-section">
                     <h3>Joined {status.hostName}</h3>
+                    <p className="live-share-note">
+                        {status.clockSynced
+                            ? 'In time with the session'
+                            : 'Syncing clock over Link…'}
+                    </p>
                 </section>
             )}
             <section className="live-share-section">
