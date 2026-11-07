@@ -63,7 +63,12 @@ export declare class Synthesizer {
    * of statistical smoothing in the UI.
    */
   setModuleProfilingSampleRate(rate: number): void
-  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null): PatchUpdateResult
+  /**
+   * Queue `patch` to replace the playing one. Inside a live session, an
+   * `atBar` update applies on the first bar boundary at or after that
+   * session bar, whatever `trigger` says.
+   */
+  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null, atBar?: number | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
   /**
@@ -97,6 +102,21 @@ export declare class Synthesizer {
    */
   getModuleStates(): Record<string, any>
   getTransportState(): TransportSnapshot
+  /**
+   * Enter a live session's shared bar numbering, update its offset, or
+   * leave it (`null`). Session bar = `floor(linkBars) + barOffset`, where
+   * `linkBars` is this peer's Link position in bars (see
+   * `TransportSnapshot.linkBars`). Inside a session, playback starts only
+   * through `startAtBar`, and an `atBar` patch update applies on a shared
+   * bar. Requires Link.
+   */
+  setSessionTimeline(barOffset?: number | undefined | null): void
+  /**
+   * Inside a live session, start playback on session bar `bar`, which
+   * becomes the song's bar 0. A bar already passed starts at once, joining
+   * the song at the bar the session has reached.
+   */
+  startAtBar(bar: number): void
   enableLink(enabled: boolean): void
   /** Refresh the device cache (re-enumerates all hosts and devices) */
   refreshDeviceCache(): void

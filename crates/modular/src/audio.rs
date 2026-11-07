@@ -1285,6 +1285,17 @@ impl AudioState {
         let _ = self.send_command(GraphCommand::Start);
     }
 
+    /// Enter, update, or leave (`None`) a live session's bar numbering.
+    pub fn set_session_timeline(&self, bar_offset: Option<i64>) -> Result<()> {
+        self.send_command(GraphCommand::SetSessionTimeline(bar_offset))
+    }
+
+    /// Inside a live session, start playback on session bar `bar`.
+    pub fn start_at_bar(&self, bar: i64) -> Result<()> {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.send_command(GraphCommand::StartAtBar(bar))
+    }
+
     pub fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
     }
@@ -1488,6 +1499,7 @@ impl AudioState {
         wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
         transport_meta: Option<TransportMeta>,
         reset_clock: bool,
+        at_bar: Option<i64>,
     ) -> Result<()> {
         let PatchGraph {
             modules,
@@ -1692,6 +1704,7 @@ impl AudioState {
 
         // Restart the transport when applying this update (set on a buffer switch)
         update.reset_clock = reset_clock;
+        update.at_bar = at_bar;
 
         // Add-only: the audio thread must write only into pre-existing slots, so a
         // dropped module's removal is deferred until its swap lands. Promote any
@@ -1719,6 +1732,7 @@ impl AudioState {
         wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
         transport_meta: Option<TransportMeta>,
         reset_clock: bool,
+        at_bar: Option<i64>,
     ) -> Vec<ApplyPatchError> {
         // Validate patch
         let schemas = schema();
@@ -1751,6 +1765,7 @@ impl AudioState {
             wav_data,
             transport_meta,
             reset_clock,
+            at_bar,
         ) {
             return vec![ApplyPatchError {
                 message: format!("Failed to apply patch: {}", e),
@@ -1999,11 +2014,19 @@ impl AudioProcessor {
                     // update before the first one fires (e.g. pressing Ctrl+Enter twice),
                     // we treat it as "apply now" rather than re-queuing for the next
                     // bar/beat.
+                    //
+                    // A session update names its own bar, so it replaces a queued one
+                    // without being hurried.
                     if let Some((old_update, _)) = self.queued_update.take() {
                         // The superseding update's `reset_clock` is already relative to the
                         // patch that is playing, so the discarded update's flag is dropped.
                         self.try_push_garbage_item(GarbageItem::PatchUpdate(old_update));
-                        self.queued_update = Some((update, QueuedTrigger::Immediate));
+                        let trigger = if update.at_bar.is_some() {
+                            trigger
+                        } else {
+                            QueuedTrigger::Immediate
+                        };
+                        self.queued_update = Some((update, trigger));
                     } else {
                         self.queued_update = Some((update, trigger));
                     }
@@ -2056,7 +2079,10 @@ impl AudioProcessor {
                     }
                 }
                 GraphCommand::Start => {
-                    if self.link.is_active() {
+                    if self.link.in_session() {
+                        // A live session starts playback only on a shared bar,
+                        // through `StartAtBar`.
+                    } else if self.link.is_active() {
                         // With Link: keep `stopped=true` and arm a pending start.
                         // The buffer-level phase check releases `stopped` when the
                         // shared Link timeline reaches a bar boundary.
@@ -2078,6 +2104,14 @@ impl AudioProcessor {
                     // resurrect a cancelled patch, and propagate stop to peers.
                     self.link.clear_pending_start();
                     self.link.signal_stop();
+                }
+                GraphCommand::SetSessionTimeline(bar_offset) => {
+                    self.link.set_session_offset(bar_offset);
+                }
+                GraphCommand::StartAtBar(bar) => {
+                    self.stopped
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.link.arm_session_start(bar);
                 }
                 GraphCommand::ClearPatch { mut fresh_patch } => {
                     // Discard any pending queued update
@@ -2348,15 +2382,26 @@ impl AudioProcessor {
             return;
         };
         for i in from..end {
-            let cb_frame = written_at_call + (i - from);
-            if let Some((bar_phase, tempo)) = self.link.phase_at_frame(cb_frame) {
-                root_clock.sync_external_clock(modular_core::types::ExternalClockState {
-                    bar_phase,
-                    bpm: tempo,
-                });
-            }
+            self.sync_clock_to_link(root_clock.as_ref(), written_at_call + (i - from));
             root_clock.ensure_processed_to(i + 1);
         }
+    }
+
+    /// Sync ROOT_CLOCK to Link at `cb_frame`; inside a live session the song
+    /// bar comes from the session. Returns the session bar, when in one.
+    #[inline]
+    fn sync_clock_to_link(
+        &self,
+        root_clock: &dyn modular_core::types::Sampleable,
+        cb_frame: usize,
+    ) -> Option<i64> {
+        let frame = self.link.frame(cb_frame)?;
+        root_clock.sync_external_clock(modular_core::types::ExternalClockState {
+            bar_phase: frame.bar_phase,
+            bpm: frame.tempo,
+            bar_index: frame.song_bar,
+        });
+        frame.session_bar
     }
 
     /// Advance ROOT_CLOCK one slot at a time through `[from, end)`, watching
@@ -2375,9 +2420,13 @@ impl AudioProcessor {
     /// Fallback: when ROOT_CLOCK is absent (e.g. immediately after a clear
     /// patch leaves only `HiddenAudioIn`), returns `Some(from)` so queued
     /// patches still apply rather than sticking around forever.
+    ///
+    /// With `min_session_bar`, only a trigger on that session bar or a later
+    /// one counts.
     fn fill_and_scan_trigger(
         &self,
         port: &str,
+        min_session_bar: Option<i64>,
         from: usize,
         end: usize,
         written_at_call: usize,
@@ -2387,15 +2436,14 @@ impl AudioProcessor {
             return Some(from);
         };
         for i in from..end {
-            let cb_frame = written_at_call + (i - from);
-            if let Some((bar_phase, tempo)) = self.link.phase_at_frame(cb_frame) {
-                root_clock.sync_external_clock(modular_core::types::ExternalClockState {
-                    bar_phase,
-                    bpm: tempo,
-                });
-            }
+            let session_bar =
+                self.sync_clock_to_link(root_clock.as_ref(), written_at_call + (i - from));
             root_clock.ensure_processed_to(i + 1);
-            if root_clock.get_value_at(port, 0, i) >= 1.0 {
+            let on_bar = match (min_session_bar, session_bar) {
+                (Some(min), Some(bar)) => bar >= min,
+                _ => true,
+            };
+            if on_bar && root_clock.get_value_at(port, 0, i) >= 1.0 {
                 return Some(i);
             }
         }
@@ -2567,14 +2615,28 @@ where
                             // stop at the trigger slot; an armed Immediate
                             // update leaves the clock untouched (the post-swap
                             // refill fills it under the new patch).
+                            let at_bar = audio_processor
+                                .queued_update
+                                .as_ref()
+                                .and_then(|(u, _)| u.at_bar)
+                                .filter(|_| audio_processor.link.in_session());
                             let trigger_sample: Option<usize> =
                                 match audio_processor.queued_update.as_ref().map(|(_, t)| t) {
+                                    Some(_) if at_bar.is_some() => audio_processor
+                                        .fill_and_scan_trigger(
+                                            "barTrigger",
+                                            at_bar,
+                                            audio_processor.block_pos,
+                                            scan_end,
+                                            written,
+                                        ),
                                     Some(QueuedTrigger::Immediate) => {
                                         Some(audio_processor.block_pos)
                                     }
                                     Some(QueuedTrigger::NextBar) => audio_processor
                                         .fill_and_scan_trigger(
                                             "barTrigger",
+                                            None,
                                             audio_processor.block_pos,
                                             scan_end,
                                             written,
@@ -2582,6 +2644,7 @@ where
                                     Some(QueuedTrigger::NextBeat) => audio_processor
                                         .fill_and_scan_trigger(
                                             "beatTrigger",
+                                            None,
                                             audio_processor.block_pos,
                                             scan_end,
                                             written,
@@ -2831,6 +2894,9 @@ where
                                 let (update, _) = audio_processor.queued_update.take().unwrap();
                                 let applied_id = update.update_id;
                                 let swap_pos = audio_processor.block_pos;
+                                if update.reset_clock {
+                                    audio_processor.link.restart_song_at_frame(written);
+                                }
                                 audio_processor.apply_patch_update(update, swap_pos);
                                 // The swap may step the output (a muted patch
                                 // replacing a loud one, an out removed);
@@ -4205,6 +4271,60 @@ mod tests {
             phase = clock.get_value_at("playhead", 0, 0);
         }
         phase
+    }
+
+    #[test]
+    fn session_update_waits_for_the_boundary_of_its_bar() {
+        let (_cmd_producer, mut processor) = create_test_processor();
+        insert_running_root_clock(&mut processor);
+        let link = rusty_link::AblLink::new(120.0);
+        let mut ss = rusty_link::SessionState::new();
+        link.capture_app_session_state(&mut ss);
+        let t0 = link.clock_micros();
+        ss.force_beat_at_time(0.0, t0, 4.0);
+        processor.link =
+            crate::link::LinkState::session_for_test(link, ss, t0, processor.sample_rate, 0);
+
+        let bar_micros = 2_000_000;
+        // Scan `frames` frames from `start_micros`, one slot per frame, for a
+        // bar trigger on session bar 2 or later.
+        let scan_from = |processor: &mut AudioProcessor, start_micros: i64, frames: usize| {
+            processor.link.set_buffer_host_time_for_test(start_micros);
+            let clock = processor
+                .patch
+                .sampleables
+                .get(&*modular_core::types::ROOT_CLOCK_ID)
+                .unwrap();
+            (0..frames).find(|&frame| {
+                clock.start_block();
+                processor
+                    .fill_and_scan_trigger("barTrigger", Some(2), 0, 1, frame)
+                    .is_some()
+            })
+        };
+
+        // Bar 1's boundary passes without a swap.
+        let quarter_bar_frames = (processor.sample_rate / 2.0) as usize;
+        assert_eq!(
+            scan_from(
+                &mut processor,
+                t0 + bar_micros - bar_micros / 8,
+                quarter_bar_frames
+            ),
+            None
+        );
+        // Bar 2's boundary swaps, an eighth of a bar into the scan.
+        let hit = scan_from(
+            &mut processor,
+            t0 + 2 * bar_micros - bar_micros / 8,
+            quarter_bar_frames,
+        )
+        .expect("swap on bar 2");
+        let expected = quarter_bar_frames / 2;
+        assert!(
+            hit.abs_diff(expected) <= 2,
+            "swapped at frame {hit}, expected ~{expected}"
+        );
     }
 
     #[test]

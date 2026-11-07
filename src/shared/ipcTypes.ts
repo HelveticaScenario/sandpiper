@@ -29,6 +29,7 @@ import type {
     DiscoveredSession,
     JoinSessionRequest,
     LiveShareStatus,
+    SessionPeer,
 } from './liveShare';
 import type {
     VideoCvValue,
@@ -228,6 +229,19 @@ export interface DSLExecuteResult {
     eqPanels?: EqPanelDef[];
     /** One entry per `$v.preview` call, in the order the shader draws them */
     videoPreviews?: VideoPreviewSite[];
+    /**
+     * Set in a live session: whether the patch waits for a later bar to
+     * apply. The editor defers its view of the patch until it does.
+     */
+    queued?: boolean;
+}
+
+/** A patch another session peer ran, now applied (or queued) here. */
+export interface RemotePatchEvent {
+    result: DSLExecuteResult;
+    /** Session-wide identity of the source the patch was built from. */
+    sourceId: string | null;
+    author: SessionPeer | null;
 }
 
 /**
@@ -443,6 +457,8 @@ export const IPC_CHANNELS = {
     LIVE_SHARE_STOP_BROWSING: 'modular:live-share:stop-browsing',
     LIVE_SHARE_ON_STATUS: 'modular:live-share:on-status',
     LIVE_SHARE_ON_DISCOVERED: 'modular:live-share:on-discovered',
+    LIVE_SHARE_ON_REMOTE_PATCH: 'modular:live-share:on-remote-patch',
+    LIVE_SHARE_ON_REMOTE_STOP: 'modular:live-share:on-remote-stop',
     LIVE_SHARE_ON_ENDED: 'modular:live-share:on-ended',
 
     // Update operations
@@ -489,7 +505,7 @@ export interface IPCHandlers {
         source: string,
         sourceId?: string,
         trigger?: QueuedTrigger,
-    ) => DSLExecuteResult;
+    ) => Promise<DSLExecuteResult>;
     [IPC_CHANNELS.GET_DSL_LIB_SOURCE]: () => string;
 
     // Synthesizer operations
@@ -672,6 +688,10 @@ export interface IPCHandlers {
     [IPC_CHANNELS.LIVE_SHARE_ON_DISCOVERED]: (
         sessions: DiscoveredSession[],
     ) => void;
+    [IPC_CHANNELS.LIVE_SHARE_ON_REMOTE_PATCH]: (
+        event: RemotePatchEvent,
+    ) => void;
+    [IPC_CHANNELS.LIVE_SHARE_ON_REMOTE_STOP]: (by: SessionPeer) => void;
     [IPC_CHANNELS.LIVE_SHARE_ON_ENDED]: (reason: string) => void;
 
     // Update operations (invokable)

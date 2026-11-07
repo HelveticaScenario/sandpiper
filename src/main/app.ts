@@ -74,7 +74,12 @@ import {
 } from './performanceWindow';
 import { executePatchScript } from './dsl/executor';
 import { LiveShareController } from './liveShare/liveShareController';
-import type { SessionEngine } from './liveShare/sessionEngine';
+import {
+    isBuiltPatch,
+    type BuiltPatch,
+    type PatchFailure,
+    type SessionEngine,
+} from './liveShare/sessionEngine';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
 import * as fs from 'fs';
@@ -946,6 +951,7 @@ function submitPatchUpdate(
     sourceId: string | undefined,
     trigger: QueuedTrigger | undefined,
     video: CompiledVideoShader | null = null,
+    session?: { atBar: number | null; resetClock: boolean },
 ) {
     // The DSL's tap slots, which every attempt places afresh.
     const dslSlots = patch.modules
@@ -962,8 +968,11 @@ function submitPatchUpdate(
             Boolean(sourceId) && lastAppliedSourceId === sourceId;
 
         // Switching playback to a different buffer (song) restarts the
-        // transport from the top, applied atomically with the patch swap.
-        const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
+        // transport from the top, applied atomically with the patch swap. In a
+        // live session the host decides, so every peer restarts together.
+        const resetClock =
+            session?.resetClock ??
+            isBufferSwitch(lastAppliedSourceId, sourceId);
 
         if (DEBUG_LOG) {
             if (!sourceId) {
@@ -1034,6 +1043,7 @@ function submitPatchUpdate(
             patch,
             trigger,
             resetClock,
+            session?.atBar ?? undefined,
         );
         if (errors.length > 0) {
             return { errors, moduleIdRemap, updateId, video: placedVideo };
@@ -1062,107 +1072,126 @@ function inWavWorkspace<T>(load: (path: string) => T): (path: string) => T {
     };
 }
 
+/** Build a patch from DSL source against the current workspace. */
+function buildPatch(source: string): BuiltPatch | PatchFailure {
+    try {
+        const {
+            patch,
+            sourceLocationMap,
+            interpolationResolutions,
+            sliders,
+            buttons,
+            callSiteSpans,
+            eqPanels,
+            video,
+            videoPreviews,
+        } = executePatchScript(source, schemas, {
+            inputChannels: synth.inputChannels(),
+            mediaExists: (relative) =>
+                mediaFileExists(currentWorkspaceRoot, relative),
+            sampleRate: synth.sampleRate(),
+            workspaceRoot: currentWorkspaceRoot,
+            wavsFolderTree: currentWavsFolderTree,
+            loadMediaAudio: inWavWorkspace((mediaPath) =>
+                synth.loadMediaAudio(mediaPath),
+            ),
+            loadWav: inWavWorkspace((wavPath) => synth.loadWav(wavPath)),
+        });
+        patch.moduleIdRemaps = [];
+        return {
+            meta: {
+                buttons,
+                callSiteSpans: Object.fromEntries(callSiteSpans),
+                eqPanels,
+                interpolationResolutions: Object.fromEntries(
+                    interpolationResolutions,
+                ),
+                sliders,
+                sourceLocationMap: Object.fromEntries(sourceLocationMap),
+                videoPreviews,
+            },
+            patch,
+            video,
+        };
+    } catch (error) {
+        return {
+            errorMessage:
+                error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
+/**
+ * Apply a built patch to this engine. `session` carries a live session's
+ * choice of bar and song restart.
+ */
+function applyBuiltPatch(
+    built: BuiltPatch,
+    sourceId: string | undefined,
+    trigger: QueuedTrigger | undefined,
+    session?: { atBar: number | null; resetClock: boolean },
+): DSLExecuteResult {
+    const {
+        errors,
+        moduleIdRemap,
+        updateId,
+        video: placedVideo,
+    } = submitPatchUpdate(built.patch, sourceId, trigger, built.video, session);
+    const result: DSLExecuteResult = {
+        ...built.meta,
+        appliedPatch: built.patch,
+        errors,
+        moduleIdRemap,
+        queued: session ? session.atBar !== null : undefined,
+        success: errors.length === 0,
+        updateId,
+    };
+    if (errors.length === 0) {
+        updateVideoShader(placedVideo, updateId);
+    }
+    return result;
+}
+
 registerIPCHandler(
     'DSL_EXECUTE',
-    (source, sourceId, trigger): DSLExecuteResult => {
+    async (source, sourceId, trigger): Promise<DSLExecuteResult> => {
+        if (liveShare.active) {
+            return liveShare.run(source, sourceId ?? null, trigger ?? null);
+        }
+        const built = buildPatch(source);
+        if (!isBuiltPatch(built)) {
+            return { ...built, success: false };
+        }
         try {
-            const {
-                patch,
-                sourceLocationMap,
-                interpolationResolutions,
-                sliders,
-                buttons,
-                callSiteSpans,
-                eqPanels,
-                video,
-                videoPreviews,
-            } = executePatchScript(source, schemas, {
-                inputChannels: synth.inputChannels(),
-                mediaExists: (relative) =>
-                    mediaFileExists(currentWorkspaceRoot, relative),
-                sampleRate: synth.sampleRate(),
-                workspaceRoot: currentWorkspaceRoot,
-                wavsFolderTree: currentWavsFolderTree,
-                loadMediaAudio: inWavWorkspace((mediaPath) =>
-                    synth.loadMediaAudio(mediaPath),
-                ),
-                loadWav: inWavWorkspace((wavPath) => synth.loadWav(wavPath)),
-            });
-            patch.moduleIdRemaps = [];
-
-            // Convert Map to Record for IPC serialization
-            const sourceLocationRecord: Record<
-                string,
-                { line: number; column: number; idIsExplicit: boolean }
-            > = {};
-            for (const [moduleId, loc] of sourceLocationMap) {
-                sourceLocationRecord[moduleId] = loc;
-            }
-
-            // Convert interpolation resolutions Map to Record for IPC serialization
-            const interpolationResolutionsRecord: Record<string, any[]> = {};
-            for (const [key, resolutions] of interpolationResolutions) {
-                interpolationResolutionsRecord[key] = resolutions;
-            }
-
-            // Convert call site spans Map to Record for IPC serialization
-            const callSiteSpansRecord: Record<
-                string,
-                { startLine: number; endLine: number }
-            > = {};
-            for (const [key, span] of callSiteSpans) {
-                callSiteSpansRecord[key] = span;
-            }
-
-            const {
-                errors,
-                moduleIdRemap,
-                updateId,
-                video: placedVideo,
-            } = submitPatchUpdate(patch, sourceId, trigger, video);
-
-            if (errors.length > 0) {
-                return {
-                    appliedPatch: patch,
-                    buttons,
-                    callSiteSpans: callSiteSpansRecord,
-                    eqPanels,
-                    errors,
-                    interpolationResolutions: interpolationResolutionsRecord,
-                    moduleIdRemap,
-                    sliders,
-                    sourceLocationMap: sourceLocationRecord,
-                    success: false,
-                    updateId,
-                    videoPreviews,
-                };
-            }
-
-            updateVideoShader(placedVideo, updateId);
-            return {
-                appliedPatch: patch,
-                buttons,
-                callSiteSpans: callSiteSpansRecord,
-                eqPanels,
-                errors: [],
-                interpolationResolutions: interpolationResolutionsRecord,
-                moduleIdRemap,
-                sliders,
-                sourceLocationMap: sourceLocationRecord,
-                success: true,
-                updateId,
-                videoPreviews,
-            };
+            return applyBuiltPatch(built, sourceId, trigger);
         } catch (error) {
-            const errorMessage =
-                error instanceof Error ? error.message : String(error);
             return {
-                errorMessage,
+                errorMessage:
+                    error instanceof Error ? error.message : String(error),
                 success: false,
             };
         }
     },
 );
+
+/** This peer's engine as a live share session drives it. */
+const sessionEngine: SessionEngine = {
+    apply: (patch) =>
+        applyBuiltPatch(patch, patch.sourceId ?? undefined, 'NextBar', {
+            atBar: patch.atBar,
+            resetClock: patch.resetClock,
+        }),
+    build: buildPatch,
+    setLinkEnabled: (enabled) => synth.enableLink(enabled),
+    setSessionTimeline: (barOffset) =>
+        synth.setSessionTimeline(barOffset ?? undefined),
+    startAtBar: (bar) => synth.startAtBar(bar),
+    stop: () => {
+        synth.stop();
+        appliedPatch.clear();
+    },
+    transport: () => synth.getTransportState(),
+};
 
 function sendToRenderer(channel: string, ...args: unknown[]): void {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1170,18 +1199,20 @@ function sendToRenderer(channel: string, ...args: unknown[]): void {
     }
 }
 
-/** This peer's engine as a live share session drives it. */
-const sessionEngine: SessionEngine = {
-    setLinkEnabled: (enabled) => synth.enableLink(enabled),
-    transport: () => synth.getTransportState(),
-};
-
 const liveShare = new LiveShareController(
     sessionEngine,
     () => os.userInfo().username || os.hostname(),
     {
         ended: (reason) =>
             sendToRenderer(IPC_CHANNELS.LIVE_SHARE_ON_ENDED, reason),
+        remotePatch: (patch, result, author) =>
+            sendToRenderer(IPC_CHANNELS.LIVE_SHARE_ON_REMOTE_PATCH, {
+                author,
+                result,
+                sourceId: patch.sourceId,
+            }),
+        remoteStop: (by) =>
+            sendToRenderer(IPC_CHANNELS.LIVE_SHARE_ON_REMOTE_STOP, by),
         status: (status) =>
             sendToRenderer(IPC_CHANNELS.LIVE_SHARE_ON_STATUS, status),
     },
@@ -1309,6 +1340,10 @@ registerIPCHandler('SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE', (rate: number) => {
 });
 
 registerIPCHandler('SYNTH_STOP', () => {
+    if (liveShare.active) {
+        liveShare.stop();
+        return;
+    }
     synth.stop();
     appliedPatch.clear();
 });

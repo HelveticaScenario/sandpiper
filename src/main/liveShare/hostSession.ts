@@ -1,17 +1,23 @@
 /**
  * The host side of a live share session: a TCP server guests join with the
- * pairing code, the list of who is in the session, and the session clock
- * heartbeat.
+ * pairing code, the session clock heartbeat, and the playback authority.
  */
 import { createServer, type AddressInfo, type Server, type Socket } from 'net';
 import { networkInterfaces } from 'os';
 import { randomUUID } from 'crypto';
+import type { QueuedTrigger } from '@modular/core';
+import type { DSLExecuteResult } from '../../shared/ipcTypes';
 import type { SessionPeer } from '../../shared/liveShare';
 import { generatePairingCode } from './pairingCode';
 import type { GuestMessage, HostMessage } from './protocol';
 import { acceptGuest, type MessageChannel } from './secureChannel';
 import { HostClock } from './sessionClock';
-import { startLink, type SessionEngine } from './sessionEngine';
+import {
+    startLink,
+    type SessionEngine,
+    type SharedPatch,
+} from './sessionEngine';
+import { applySharedPatch, HostPlayback } from './sessionPlayback';
 import { peerColor } from './peerColors';
 
 /** How often the host broadcasts its session position. */
@@ -31,6 +37,10 @@ interface Guest {
 export interface HostSessionEvents {
     /** The peer list changed. */
     peersChanged(): void;
+    /** A patch authored by another peer applied on this engine. */
+    remotePatch(patch: SharedPatch, result: DSLExecuteResult): void;
+    /** Another peer stopped playback. */
+    remoteStop(by: SessionPeer): void;
 }
 
 export class HostSession {
@@ -41,6 +51,7 @@ export class HostSession {
     private readonly server: Server;
     private readonly guests = new Map<string, Guest>();
     private readonly failedAttempts = new Map<string, number[]>();
+    private readonly playback: HostPlayback;
     private readonly clock: HostClock;
     private heartbeat: NodeJS.Timeout | null = null;
     private nextColor = 1;
@@ -51,6 +62,8 @@ export class HostSession {
         private readonly events: HostSessionEvents,
     ) {
         this.clock = new HostClock(engine.transport().linkBars, Date.now());
+        engine.setSessionTimeline(this.clock.offset);
+        this.playback = new HostPlayback(engine, () => this.sessionBars());
         this.server = createServer((socket) => void this.admit(socket));
     }
 
@@ -102,6 +115,31 @@ export class HostSession {
         ];
     }
 
+    /** A run on the host itself. */
+    run(
+        source: string,
+        sourceId: string | null,
+        trigger: QueuedTrigger | null,
+    ): DSLExecuteResult {
+        const shared = this.playback.run({
+            authorId: this.selfId,
+            requestId: null,
+            source,
+            sourceId,
+            trigger,
+        });
+        if (!('patch' in shared)) {
+            return { ...shared, success: false };
+        }
+        this.broadcast({ patch: shared, t: 'patch' });
+        return applySharedPatch(this.engine, shared);
+    }
+
+    /** A stop on the host itself. */
+    stop(): void {
+        this.stopEveryone(this.selfId);
+    }
+
     close(): void {
         if (this.heartbeat) {
             clearInterval(this.heartbeat);
@@ -111,6 +149,7 @@ export class HostSession {
         }
         this.guests.clear();
         this.server.close();
+        this.engine.setSessionTimeline(null);
     }
 
     private sessionBars(): number {
@@ -119,7 +158,9 @@ export class HostSession {
 
     private tick(): void {
         const { linkBars, bpm } = this.engine.transport();
-        this.clock.sample(linkBars, bpm, Date.now());
+        if (this.clock.sample(linkBars, bpm, Date.now())) {
+            this.engine.setSessionTimeline(this.clock.offset);
+        }
         this.broadcast({ sessionBars: this.sessionBars(), t: 'clock' });
     }
 
@@ -154,6 +195,7 @@ export class HostSession {
             },
         };
         this.guests.set(id, guest);
+        guest.channel.onMessage((message) => this.receive(guest, message));
         guest.channel.onClose(() => {
             if (this.guests.delete(id)) {
                 this.announcePeers();
@@ -161,6 +203,7 @@ export class HostSession {
         });
         guest.channel.send({
             peers: this.peers(),
+            playback: this.playback.state(),
             selfId: id,
             t: 'welcome',
         });
@@ -174,6 +217,45 @@ export class HostSession {
         );
         this.failedAttempts.set(address, recent);
         return recent.length;
+    }
+
+    private receive(guest: Guest, message: GuestMessage): void {
+        switch (message.t) {
+            case 'run': {
+                const shared = this.playback.run({
+                    authorId: guest.peer.id,
+                    requestId: message.requestId,
+                    source: message.source,
+                    sourceId: message.sourceId,
+                    trigger: message.trigger,
+                });
+                if (!('patch' in shared)) {
+                    guest.channel.send({
+                        failure: shared,
+                        requestId: message.requestId,
+                        t: 'runFailed',
+                    });
+                    return;
+                }
+                this.broadcast({ patch: shared, t: 'patch' });
+                const result = applySharedPatch(this.engine, shared);
+                this.events.remotePatch(shared, result);
+                return;
+            }
+            case 'stop':
+                this.stopEveryone(guest.peer.id);
+                return;
+        }
+    }
+
+    private stopEveryone(by: string): void {
+        this.playback.stop();
+        this.broadcast({ by, t: 'stop' });
+        this.engine.stop();
+        const peer = this.peers().find((p) => p.id === by);
+        if (by !== this.selfId && peer) {
+            this.events.remoteStop(peer);
+        }
     }
 
     private announcePeers(): void {

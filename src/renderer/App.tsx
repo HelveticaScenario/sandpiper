@@ -2132,7 +2132,8 @@ function App() {
                 // For queued (non-immediate) triggers, defer UI state until the
                 // Audio thread actually applies the patch update.
                 const isDeferred =
-                    trigger === 'NextBar' || trigger === 'NextBeat';
+                    result.queued ??
+                    (trigger === 'NextBar' || trigger === 'NextBeat');
 
                 if (isDeferred && result.updateId != null) {
                     // Stash both new decorations and UI state; keep old
@@ -2246,6 +2247,26 @@ function App() {
     }, []);
     const handleStop = useCallback(() => handleStopRef.current(), []);
 
+    // In a live session, another peer's stop stops this engine too.
+    useEffect(
+        () =>
+            electronAPI.liveShare.onRemoteStop(() => {
+                setIsClockRunning(false);
+                setRunningBufferId(null);
+                runningSourceIdRef.current = null;
+                setRunningControlsSource(null);
+            }),
+        [],
+    );
+    useEffect(
+        () =>
+            electronAPI.liveShare.onRemotePatch(({ result }) => {
+                if (result.success) {
+                    setIsClockRunning(true);
+                }
+            }),
+        [],
+    );
     useEffect(
         () =>
             electronAPI.liveShare.onEnded((reason) =>

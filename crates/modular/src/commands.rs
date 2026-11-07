@@ -99,6 +99,11 @@ pub struct PatchUpdate {
     /// leaves it false so the clock keeps running uninterrupted.
     pub reset_clock: bool,
 
+    /// Inside a live session, the session bar this update applies on: the
+    /// first bar boundary at or after it. A newer update replaces it without
+    /// being hurried, so every peer applies the same updates on the same bars.
+    pub at_bar: Option<i64>,
+
     /// Pre-allocated TLS profiler records map, one entry per constructed module
     /// id. Consumed by `profiling::swap_records` on the audio thread; the
     /// evicted map flows back via the garbage queue. Always populated, even
@@ -128,6 +133,7 @@ impl PatchUpdate {
             sample_rate,
             transport_meta: None,
             reset_clock: false,
+            at_bar: None,
             profile_records_seed: HashMap::new(),
             profile_shared_seed: HashMap::new(),
         }
@@ -211,6 +217,14 @@ pub enum GraphCommand {
     /// the resources it holds. Old resources removed by this command are
     /// pushed to the garbage queue so the main thread can drop them safely.
     SetLink(Option<Box<LinkResources>>),
+
+    /// Enter a live session with this session-bar offset over the Link
+    /// timeline, update the offset, or leave the session (`None`).
+    SetSessionTimeline(Option<i64>),
+
+    /// Inside a live session, start playback on this session bar, which
+    /// becomes the song's bar 0.
+    StartAtBar(i64),
 }
 
 /// Error types that can be reported from the audio thread back to the main thread.

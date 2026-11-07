@@ -17,11 +17,16 @@ import {
     SyphonToggleResult,
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
-import type { FileChange, QueuedTrigger } from '../shared/ipcTypes';
+import type {
+    FileChange,
+    QueuedTrigger,
+    RemotePatchEvent,
+} from '../shared/ipcTypes';
 import type {
     DiscoveredSession,
     JoinSessionRequest,
     LiveShareStatus,
+    SessionPeer,
 } from '../shared/liveShare';
 import type {
     VideoCvValue,
@@ -325,6 +330,10 @@ export interface ElectronAPI {
         onDiscovered: (
             callback: (sessions: DiscoveredSession[]) => void,
         ) => () => void;
+        onRemotePatch: (
+            callback: (event: RemotePatchEvent) => void,
+        ) => () => void;
+        onRemoteStop: (callback: (by: SessionPeer) => void) => () => void;
         onEnded: (callback: (reason: string) => void) => () => void;
     };
 
@@ -632,6 +641,12 @@ const electronAPI: ElectronAPI = {
             IPC_CHANNELS.LIVE_SHARE_ON_DISCOVERED,
         ),
         onEnded: menuEventHandler<[string]>(IPC_CHANNELS.LIVE_SHARE_ON_ENDED),
+        onRemotePatch: menuEventHandler<[RemotePatchEvent]>(
+            IPC_CHANNELS.LIVE_SHARE_ON_REMOTE_PATCH,
+        ),
+        onRemoteStop: menuEventHandler<[SessionPeer]>(
+            IPC_CHANNELS.LIVE_SHARE_ON_REMOTE_STOP,
+        ),
         onStatus: menuEventHandler<[LiveShareStatus]>(
             IPC_CHANNELS.LIVE_SHARE_ON_STATUS,
         ),
