@@ -40,6 +40,7 @@ fn validate_clock_params(
 struct ExternalClockSync {
     bar_phase: f64,
     bpm: f64,
+    bar_index: Option<u64>,
 }
 
 struct ClockState {
@@ -134,13 +135,14 @@ message_handlers!(impl Clock {
 });
 
 impl Clock {
-    /// Inject one sample's worth of Link transport state. Called by the
+    /// Inject one sample's worth of external transport state. Called by the
     /// audio callback before each inner `update`, so the clock can resolve
     /// triggers on the exact sample boundary the peer's timeline lands on.
     pub fn sync_external_clock_impl(&mut self, state: ExternalClockState) {
         self.state.external_sync = Some(ExternalClockSync {
             bar_phase: state.bar_phase,
             bpm: state.bpm,
+            bar_index: state.bar_index,
         });
     }
 
@@ -205,10 +207,11 @@ impl Clock {
             // incoming `bar_phase`. The old `old_phase > 0.5` test misread that
             // tiny rewind as a bar boundary, double-counting `loop_index`.
             let bar_wrapped = old_phase - sync.bar_phase > 0.5;
-            self.state.loop_index = if bar_wrapped {
-                self.state.loop_index + 1
-            } else {
-                self.state.loop_index
+            let first_sync_frame = old_phase == 0.0 && self.state.loop_index == 0;
+            self.state.loop_index = match sync.bar_index {
+                Some(index) => index,
+                None if bar_wrapped => self.state.loop_index + 1,
+                None => self.state.loop_index,
             };
 
             // Derive beat and PPQ phases from bar phase
@@ -231,7 +234,6 @@ impl Clock {
             // Detect beat boundary crossing
             let old_beat = (old_phase / beat_period).floor();
             let new_beat = (sync.bar_phase / beat_period).floor();
-            let first_sync_frame = old_phase == 0.0 && self.state.loop_index == 0;
             if new_beat != old_beat || bar_wrapped || first_sync_frame {
                 self.state
                     .beat_gate
@@ -706,6 +708,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.75,
             bpm: 140.0,
+            bar_index: None,
         });
         c.update(sr);
 
@@ -733,6 +736,7 @@ mod tests {
             c.sync_external_clock_impl(ExternalClockState {
                 bar_phase,
                 bpm: 120.0,
+                bar_index: None,
             });
             c.update(sr);
 
@@ -764,6 +768,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.70,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         let loop_before = c.state.loop_index;
@@ -773,6 +778,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.6993,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
 
@@ -796,6 +802,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.99,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         let loop_before = c.state.loop_index;
@@ -803,6 +810,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.01,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
 
@@ -826,11 +834,13 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.99,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.05,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         assert_eq!(c.state.loop_index, 1, "one wrap should advance loop_index");
@@ -844,6 +854,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.10,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         assert_eq!(
@@ -860,11 +871,13 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.99,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.02,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         assert_eq!(
@@ -892,11 +905,13 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 1.0 - step,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.0,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         assert_eq!(
@@ -914,6 +929,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.0,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
         assert_eq!(
@@ -933,6 +949,7 @@ mod tests {
             c.sync_external_clock_impl(ExternalClockState {
                 bar_phase: i as f64 * step,
                 bpm: 120.0,
+                bar_index: None,
             });
             c.update(sr);
             assert_eq!(
@@ -1026,6 +1043,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.5,
             bpm: 120.0,
+            bar_index: None,
         });
         c.update(sr);
 
@@ -1088,6 +1106,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.25,
             bpm: 128.0,
+            bar_index: None,
         });
         c.update(sr);
         assert_eq!(c.outputs.tempo, 128.0);
@@ -1096,6 +1115,7 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.26,
             bpm: 174.0,
+            bar_index: None,
         });
         c.update(sr);
         assert_eq!(c.outputs.tempo, 174.0);
@@ -1111,11 +1131,41 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.5,
             bpm: 100.0,
+            bar_index: None,
         });
         c.update(sr);
 
         c.clear_external_sync();
         c.update(sr);
         assert_eq!(c.outputs.tempo, 100.0);
+    }
+
+    #[test]
+    fn clock_external_bar_index_overrides_wrap_count() {
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+        let sync = |c: &mut Clock, bar_phase: f64, bar_index: u64| {
+            c.sync_external_clock_impl(ExternalClockState {
+                bar_phase,
+                bpm: 120.0,
+                bar_index: Some(bar_index),
+            });
+            c.update(sr);
+        };
+
+        // The injected index is reported as-is, with no wraps observed.
+        sync(&mut c, 0.4, 7);
+        assert_eq!(c.state.loop_index, 7);
+
+        // A wrap still fires the bar trigger but the count follows the index.
+        sync(&mut c, 0.99, 7);
+        sync(&mut c, 0.001, 8);
+        assert_eq!(c.state.loop_index, 8);
+        assert_eq!(c.outputs.bar_trigger, 5.0);
+
+        // An index restart at a bar boundary is taken verbatim.
+        sync(&mut c, 0.99, 8);
+        sync(&mut c, 0.001, 0);
+        assert_eq!(c.state.loop_index, 0);
     }
 }

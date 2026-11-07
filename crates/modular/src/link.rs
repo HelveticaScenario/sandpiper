@@ -57,6 +57,35 @@ pub struct LinkState {
     /// Pending quantized start — a Start was requested but transport is
     /// waiting for the next Link bar boundary before actually playing.
     pending_start: bool,
+    /// Shared bar numbering for a live session, or `None` outside one.
+    session: Option<SessionTimeline>,
+}
+
+/// A live session's bar numbering over the Link timeline. Link aligns only
+/// the phase within a bar between peers; the session supplies which bar it
+/// is, so every peer agrees on bar numbers and on where the song began.
+///
+/// Session bar = `floor(link_beat / QUANTUM) + bar_offset`.
+#[derive(Debug, Clone, Copy)]
+struct SessionTimeline {
+    bar_offset: i64,
+    /// Session bar the playing song's bar 0 began on.
+    song_origin: i64,
+    /// Session bar an armed start releases on.
+    start_bar: Option<i64>,
+}
+
+/// Link transport at one frame of the current buffer.
+#[derive(Debug, Clone, Copy)]
+pub struct LinkFrame {
+    /// Bar phase in [0, 1).
+    pub bar_phase: f64,
+    pub tempo: f64,
+    /// Session bar, inside a live session.
+    pub session_bar: Option<i64>,
+    /// Song bar (session bar counted from the song's origin), inside a live
+    /// session.
+    pub song_bar: Option<u64>,
 }
 
 impl LinkState {
@@ -68,6 +97,7 @@ impl LinkState {
             sample_count: 0,
             buffer: None,
             pending_start: false,
+            session: None,
         }
     }
 
@@ -104,6 +134,9 @@ impl LinkState {
     fn take(&mut self) -> Option<Box<LinkResources>> {
         self.buffer = None;
         self.pending_start = false;
+        if let Some(session) = self.session.as_mut() {
+            session.start_bar = None;
+        }
 
         match (
             self.link.take(),
@@ -126,6 +159,51 @@ impl LinkState {
     #[inline]
     pub fn clear_pending_start(&mut self) {
         self.pending_start = false;
+        if let Some(session) = self.session.as_mut() {
+            session.start_bar = None;
+        }
+    }
+
+    /// Enter a live session with this bar offset, update the offset of the
+    /// current one, or leave it (`None`). Updating keeps the song origin and
+    /// any armed start, which are in session bars.
+    pub fn set_session_offset(&mut self, bar_offset: Option<i64>) {
+        self.session = bar_offset.map(|bar_offset| match self.session {
+            Some(session) => SessionTimeline {
+                bar_offset,
+                ..session
+            },
+            None => SessionTimeline {
+                bar_offset,
+                song_origin: 0,
+                start_bar: None,
+            },
+        });
+    }
+
+    /// Whether a live session owns the bar numbering.
+    #[inline]
+    pub fn in_session(&self) -> bool {
+        self.session.is_some()
+    }
+
+    /// Arm a session start: playback begins once the session reaches `bar`,
+    /// and that bar becomes the song's bar 0. A bar already passed releases
+    /// on the next buffer, joining the song mid-way.
+    pub fn arm_session_start(&mut self, bar: i64) {
+        if let Some(session) = self.session.as_mut() {
+            session.start_bar = Some(bar);
+            session.song_origin = bar;
+        }
+    }
+
+    /// Make the session bar at `cb_frame` the song's bar 0.
+    pub fn restart_song_at_frame(&mut self, cb_frame: usize) {
+        if let Some(bar) = self.frame(cb_frame).and_then(|f| f.session_bar)
+            && let Some(session) = self.session.as_mut()
+        {
+            session.song_origin = bar;
+        }
     }
 
     /// Audio-callback prologue: capture the session state once per buffer.
@@ -159,6 +237,16 @@ impl LinkState {
     /// responsible for flipping the stopped atomic and dispatching
     /// `Clock::Start`.
     pub fn check_pending_start_release(&mut self) -> bool {
+        if let Some(start_bar) = self.session.and_then(|s| s.start_bar) {
+            let reached = self
+                .frame(0)
+                .and_then(|f| f.session_bar)
+                .is_some_and(|bar| bar >= start_bar);
+            if reached && let Some(session) = self.session.as_mut() {
+                session.start_bar = None;
+            }
+            return reached;
+        }
         if !self.pending_start {
             return false;
         }
@@ -184,17 +272,35 @@ impl LinkState {
         }
     }
 
-    /// Read bar-phase + tempo at the given cpal-frame offset within the current
+    /// Link transport at the given cpal-frame offset within the current
     /// callback's buffer snapshot. Returns `None` when Link is inactive.
     /// Pure read — used by the eager-fill loop to sync ROOT_CLOCK one
     /// sample at a time across arbitrary frame indices in a callback.
-    pub fn phase_at_frame(&self, cb_frame: usize) -> Option<(f64, f64)> {
+    pub fn frame(&self, cb_frame: usize) -> Option<LinkFrame> {
         let buffer = self.buffer.as_ref()?;
         let ss = self.session_state.as_ref()?;
         let frame_offset_micros = (cb_frame as f64 * buffer.micros_per_sample) as i64;
         let frame_host_time = buffer.host_time_micros + frame_offset_micros;
-        let phase = ss.phase_at_time(frame_host_time, buffer.quantum);
-        Some((phase / buffer.quantum, buffer.tempo))
+        let Some(session) = self.session else {
+            let phase = ss.phase_at_time(frame_host_time, buffer.quantum);
+            return Some(LinkFrame {
+                bar_phase: phase / buffer.quantum,
+                tempo: buffer.tempo,
+                session_bar: None,
+                song_bar: None,
+            });
+        };
+        // Phase and bar both come from the one beat reading so a bar
+        // boundary moves them together.
+        let bars = ss.beat_at_time(frame_host_time, buffer.quantum) / buffer.quantum;
+        let link_bar = bars.floor();
+        let session_bar = link_bar as i64 + session.bar_offset;
+        Some(LinkFrame {
+            bar_phase: bars - link_bar,
+            tempo: buffer.tempo,
+            session_bar: Some(session_bar),
+            song_bar: Some(session_bar.saturating_sub(session.song_origin).max(0) as u64),
+        })
     }
 
     /// Link bars (beats / quantum) at the start of the current buffer.
@@ -261,7 +367,9 @@ impl LinkState {
                     meter.write_link_phase(bar_phase);
                 }
             }
-            meter.write_link_pending_start(self.pending_start);
+            meter.write_link_pending_start(
+                self.pending_start || self.session.is_some_and(|s| s.start_bar.is_some()),
+            );
             if let Some(bars) = self.buffer_bars() {
                 meter.write_link_bars(bars);
             }
@@ -272,8 +380,112 @@ impl LinkState {
 }
 
 #[cfg(test)]
+impl LinkState {
+    /// A `LinkState` inside a session with `bar_offset`, holding `ss` and a
+    /// buffer captured at `host_time_micros`.
+    pub(crate) fn session_for_test(
+        link: AblLink,
+        ss: SessionState,
+        host_time_micros: i64,
+        sample_rate: f32,
+        bar_offset: i64,
+    ) -> Self {
+        let mut state = LinkState::new();
+        state.link = Some(link);
+        state.session_state = Some(ss);
+        state.buffer = Some(LinkBufferState {
+            host_time_micros,
+            quantum: QUANTUM,
+            tempo: 120.0,
+            micros_per_sample: 1_000_000.0 / sample_rate as f64,
+        });
+        state.set_session_offset(Some(bar_offset));
+        state
+    }
+
+    pub(crate) fn set_buffer_host_time_for_test(&mut self, host_time_micros: i64) {
+        self.buffer.as_mut().unwrap().host_time_micros = host_time_micros;
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One bar at 120 BPM in 4/4.
+    const BAR_MICROS: i64 = 2_000_000;
+
+    /// A session-mode `LinkState` whose Link beat 0 sits at the returned
+    /// host time, captured at that time.
+    fn session_at_beat_zero(bar_offset: i64) -> (LinkState, i64) {
+        let link = AblLink::new(120.0);
+        let mut ss = SessionState::new();
+        link.capture_app_session_state(&mut ss);
+        let t0 = link.clock_micros();
+        ss.force_beat_at_time(0.0, t0, QUANTUM);
+        (
+            LinkState::session_for_test(link, ss, t0, 48_000.0, bar_offset),
+            t0,
+        )
+    }
+
+    #[test]
+    fn session_bars_are_link_bars_plus_offset() {
+        let (mut state, t0) = session_at_beat_zero(10);
+        state.set_buffer_host_time_for_test(t0 + 2 * BAR_MICROS + BAR_MICROS / 2);
+        let frame = state.frame(0).unwrap();
+        assert_eq!(frame.session_bar, Some(12));
+        assert!((frame.bar_phase - 0.5).abs() < 1e-6);
+        assert!((state.buffer_bars().unwrap() - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn session_start_releases_on_its_bar_and_counts_the_song_from_it() {
+        let (mut state, t0) = session_at_beat_zero(10);
+        state.arm_session_start(11);
+
+        state.set_buffer_host_time_for_test(t0 + BAR_MICROS - 1_000);
+        assert!(!state.check_pending_start_release());
+
+        state.set_buffer_host_time_for_test(t0 + BAR_MICROS + 1_000);
+        assert!(state.check_pending_start_release());
+        assert!(!state.check_pending_start_release());
+        assert_eq!(state.frame(0).unwrap().song_bar, Some(0));
+
+        state.set_buffer_host_time_for_test(t0 + 3 * BAR_MICROS + BAR_MICROS / 5);
+        assert_eq!(state.frame(0).unwrap().song_bar, Some(2));
+    }
+
+    #[test]
+    fn session_start_on_a_passed_bar_joins_the_song_mid_way() {
+        let (mut state, t0) = session_at_beat_zero(0);
+        state.set_buffer_host_time_for_test(t0 + 7 * BAR_MICROS + BAR_MICROS / 3);
+        state.arm_session_start(3);
+        assert!(state.check_pending_start_release());
+        assert_eq!(state.frame(0).unwrap().song_bar, Some(4));
+    }
+
+    #[test]
+    fn new_session_offset_keeps_song_origin_and_armed_start() {
+        let (mut state, t0) = session_at_beat_zero(0);
+        state.arm_session_start(5);
+        // The same session bars now sit one Link bar later on this peer.
+        state.set_session_offset(Some(-1));
+        state.set_buffer_host_time_for_test(t0 + 5 * BAR_MICROS + 1_000);
+        assert!(!state.check_pending_start_release());
+        state.set_buffer_host_time_for_test(t0 + 6 * BAR_MICROS + 1_000);
+        assert!(state.check_pending_start_release());
+        assert_eq!(state.frame(0).unwrap().song_bar, Some(0));
+    }
+
+    #[test]
+    fn stop_disarms_a_session_start() {
+        let (mut state, t0) = session_at_beat_zero(0);
+        state.arm_session_start(1);
+        state.clear_pending_start();
+        state.set_buffer_host_time_for_test(t0 + 2 * BAR_MICROS);
+        assert!(!state.check_pending_start_release());
+    }
 
     /// A `LinkState` with a pending start, holding the given session snapshot
     /// and a buffer captured at `host_time_micros`.

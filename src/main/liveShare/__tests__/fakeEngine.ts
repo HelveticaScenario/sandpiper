@@ -1,5 +1,11 @@
-import type { TransportSnapshot } from '@modular/core';
-import type { SessionEngine } from '../sessionEngine';
+import type { PatchGraph, TransportSnapshot } from '@modular/core';
+import type { DSLExecuteResult } from '../../../shared/ipcTypes';
+import type {
+    BuiltPatch,
+    PatchFailure,
+    SessionEngine,
+    SharedPatch,
+} from '../sessionEngine';
 
 /** One bar at 120 BPM in 4/4. */
 export const BAR_MS = 2_000;
@@ -12,6 +18,11 @@ export const BAR_MS = 2_000;
 export class FakeEngine implements SessionEngine {
     linkEnabled = false;
     linkPeers = 1;
+    sessionOffset: number | null = null;
+    startBars: number[] = [];
+    applied: SharedPatch[] = [];
+    stops = 0;
+    private nextUpdateId = 0;
 
     constructor(
         private readonly epoch: number,
@@ -40,7 +51,52 @@ export class FakeEngine implements SessionEngine {
         };
     }
 
+    /** This peer's session bar now, by its current offset. */
+    sessionBar(): number | null {
+        return this.sessionOffset === null
+            ? null
+            : Math.floor(this.transport().linkBars) + this.sessionOffset;
+    }
+
     setLinkEnabled(enabled: boolean): void {
         this.linkEnabled = enabled;
+    }
+
+    setSessionTimeline(barOffset: number | null): void {
+        this.sessionOffset = barOffset;
+    }
+
+    startAtBar(bar: number): void {
+        this.startBars.push(bar);
+    }
+
+    stop(): void {
+        this.stops++;
+    }
+
+    build(source: string): BuiltPatch | PatchFailure {
+        if (source.includes('syntax error')) {
+            return { errorMessage: 'Unexpected token' };
+        }
+        const patch = {
+            modules: [],
+            scopes: [],
+            vuMeters: [],
+        } as unknown as PatchGraph;
+        return {
+            meta: { sliders: [] },
+            patch,
+            video: null,
+        };
+    }
+
+    apply(patch: SharedPatch): DSLExecuteResult {
+        this.applied.push(patch);
+        return {
+            ...patch.meta,
+            appliedPatch: patch.patch,
+            success: true,
+            updateId: ++this.nextUpdateId,
+        };
     }
 }

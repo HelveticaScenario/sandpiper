@@ -1281,12 +1281,16 @@ impl Synthesizer {
         self.state.set_module_profiling_sample_rate(rate);
     }
 
+    /// Queue `patch` to replace the playing one. Inside a live session, an
+    /// `atBar` update applies on the first bar boundary at or after that
+    /// session bar, whatever `trigger` says.
     #[napi]
     pub fn update_patch(
         &mut self,
         mut patch: PatchGraph,
         trigger: Option<QueuedTrigger>,
         reset_clock: Option<bool>,
+        at_bar: Option<i64>,
     ) -> PatchUpdateResult {
         // Drain deferred deallocations from the audio thread
         self.state.drain_garbage();
@@ -1365,6 +1369,7 @@ impl Synthesizer {
             wav_data_snapshot,
             transport_meta,
             reset_clock,
+            at_bar,
         );
 
         PatchUpdateResult {
@@ -1548,6 +1553,25 @@ impl Synthesizer {
     #[napi]
     pub fn get_transport_state(&self) -> TransportSnapshot {
         self.state.get_transport_state()
+    }
+
+    /// Enter a live session's shared bar numbering, update its offset, or
+    /// leave it (`null`). Session bar = `floor(linkBars) + barOffset`, where
+    /// `linkBars` is this peer's Link position in bars (see
+    /// `TransportSnapshot.linkBars`). Inside a session, playback starts only
+    /// through `startAtBar`, and an `atBar` patch update applies on a shared
+    /// bar. Requires Link.
+    #[napi]
+    pub fn set_session_timeline(&self, bar_offset: Option<i64>) -> Result<()> {
+        self.state.set_session_timeline(bar_offset)
+    }
+
+    /// Inside a live session, start playback on session bar `bar`, which
+    /// becomes the song's bar 0. A bar already passed starts at once, joining
+    /// the song at the bar the session has reached.
+    #[napi]
+    pub fn start_at_bar(&self, bar: i64) -> Result<()> {
+        self.state.start_at_bar(bar)
     }
 
     #[napi]

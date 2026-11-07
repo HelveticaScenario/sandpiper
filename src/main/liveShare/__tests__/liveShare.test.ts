@@ -4,10 +4,12 @@ import { encodeFrame, FrameReader } from '../framing';
 import { generatePairingCode, normalizePairingCode } from '../pairingCode';
 import { acceptGuest, joinHost, type MessageChannel } from '../secureChannel';
 import { GuestClock, guestBarOffset, HostClock } from '../sessionClock';
+import { HostPlayback, nextSharedBar } from '../sessionPlayback';
 import { HostSession } from '../hostSession';
 import { GuestSession } from '../guestSession';
 import { BAR_MS, FakeEngine } from './fakeEngine';
 import { waitFor } from './waitFor';
+import type { SessionPeer } from '../../../shared/liveShare';
 
 describe('framing', () => {
     it('reassembles frames split and joined arbitrarily', () => {
@@ -169,9 +171,7 @@ describe('host and guest sessions', () => {
         const host = await HostSession.open(
             new FakeEngine(epoch, 500),
             'Host',
-            {
-                peersChanged() {},
-            },
+            { peersChanged() {}, remotePatch() {}, remoteStop() {} },
         );
         closers.push(() => host.close());
         return host;
@@ -191,7 +191,13 @@ describe('host and guest sessions', () => {
                 port: host.port,
             },
             name,
-            { closed() {}, statusChanged() {}, ...events },
+            {
+                closed() {},
+                remotePatch() {},
+                remoteStop() {},
+                statusChanged() {},
+                ...events,
+            },
         );
         closers.push(() => guest.leave());
         return guest;
@@ -224,7 +230,12 @@ describe('host and guest sessions', () => {
                     port: host.port,
                 },
                 'Guest',
-                { closed() {}, statusChanged() {} },
+                {
+                    closed() {},
+                    remotePatch() {},
+                    remoteStop() {},
+                    statusChanged() {},
+                },
             ),
         ).rejects.toThrow('Wrong pairing code');
         expect(host.peers()).toHaveLength(1);
@@ -233,6 +244,8 @@ describe('host and guest sessions', () => {
     it('tells guests when the host ends the session', async () => {
         const host = await HostSession.open(new FakeEngine(epoch, 0), 'Host', {
             peersChanged() {},
+            remotePatch() {},
+            remoteStop() {},
         });
         let ended = '';
         await join(host, 'Guest', {
@@ -257,5 +270,179 @@ describe('host and guest sessions', () => {
         expect(guest.clockSynced).toBe(false);
         engine.linkPeers = 1;
         await waitFor(() => guest.clockSynced);
+    });
+});
+
+describe('host playback', () => {
+    it('leaves enough lead before the bar a patch plays on', () => {
+        expect(nextSharedBar(4.5)).toBe(5);
+        expect(nextSharedBar(4.9)).toBe(6);
+    });
+
+    it('starts on a bar, then queues later runs and song switches', () => {
+        let bars = 10.2;
+        const engine = new FakeEngine(Date.now(), 0);
+        const playback = new HostPlayback(engine, () => bars);
+        const run = (sourceId: string) =>
+            playback.run({
+                authorId: 'host',
+                requestId: null,
+                source: '',
+                sourceId,
+                trigger: 'Immediate',
+            });
+        expect(run('a')).toMatchObject({ atBar: null, startBar: 11 });
+        bars = 12.5;
+        expect(run('a')).toMatchObject({
+            atBar: 13,
+            resetClock: false,
+            startBar: null,
+        });
+        expect(run('b')).toMatchObject({ atBar: 13, resetClock: true });
+        expect(playback.state()).toMatchObject({
+            playing: true,
+            songOrigin: 13,
+        });
+        playback.stop();
+        expect(playback.state()).toMatchObject({ patch: null, playing: false });
+    });
+
+    it('reports a failed build without changing playback', () => {
+        const playback = new HostPlayback(new FakeEngine(0, 0), () => 0);
+        const result = playback.run({
+            authorId: 'host',
+            requestId: null,
+            source: 'syntax error',
+            sourceId: 'a',
+            trigger: null,
+        });
+        expect(result).toEqual({ errorMessage: 'Unexpected token' });
+        expect(playback.state().playing).toBe(false);
+    });
+});
+
+describe('shared playback', () => {
+    const closers: (() => void)[] = [];
+    afterEach(() => closers.splice(0).forEach((c) => c()));
+
+    const noEvents = {
+        peersChanged() {},
+        remotePatch() {},
+        remoteStop() {},
+    };
+
+    async function openSession(guestCount: number) {
+        const epoch = Date.now() - BAR_MS * 3.3;
+        const hostEngine = new FakeEngine(epoch, 500);
+        const remoteStops: SessionPeer[] = [];
+        const remotePatches: string[] = [];
+        const host = await HostSession.open(hostEngine, 'Host', {
+            ...noEvents,
+            remotePatch: (patch) => remotePatches.push(patch.authorId),
+            remoteStop: (by) => remoteStops.push(by),
+        });
+        closers.push(() => host.close());
+        const guests = [];
+        for (let i = 0; i < guestCount; i++) {
+            const engine = new FakeEngine(epoch, -20 * (i + 1));
+            const session = await GuestSession.join(
+                engine,
+                {
+                    address: '127.0.0.1',
+                    pairingCode: host.pairingCode,
+                    port: host.port,
+                },
+                `Guest ${i}`,
+                {
+                    closed() {},
+                    remotePatch() {},
+                    remoteStop() {},
+                    statusChanged() {},
+                },
+            );
+            closers.push(() => session.leave());
+            guests.push({ engine, session });
+        }
+        return { guests, host, hostEngine, remotePatches, remoteStops };
+    }
+
+    it('numbers bars the same on every peer', async () => {
+        const { guests, host, hostEngine } = await openSession(2);
+        await waitFor(() => guests.every((g) => g.session.clockSynced));
+        expect(host.peers().map((p) => p.name)).toEqual([
+            'Host',
+            'Guest 0',
+            'Guest 1',
+        ]);
+        for (const { engine } of guests) {
+            expect(engine.sessionBar()).toBe(hostEngine.sessionBar());
+        }
+    });
+
+    it("plays a guest's run on every peer on the same bar", async () => {
+        const { guests, hostEngine, remotePatches } = await openSession(2);
+        await waitFor(() => guests.every((g) => g.session.clockSynced));
+        const result = await guests[0].session.run('code', 'song', 'NextBar');
+        expect(result.success).toBe(true);
+        expect(result.updateId).toBe(1);
+        await waitFor(() => guests[1].engine.applied.length === 1);
+        const startBars = [hostEngine, ...guests.map((g) => g.engine)].map(
+            (e) => e.startBars,
+        );
+        expect(new Set(startBars.map((b) => JSON.stringify(b))).size).toBe(1);
+        expect(startBars[0]).toHaveLength(1);
+        expect(remotePatches).toEqual([guests[0].session.selfId]);
+    });
+
+    it('reports a build failure to the guest that ran it alone', async () => {
+        const { guests, hostEngine } = await openSession(1);
+        const result = await guests[0].session.run('syntax error', null, null);
+        expect(result).toMatchObject({
+            errorMessage: 'Unexpected token',
+            success: false,
+        });
+        expect(hostEngine.applied).toHaveLength(0);
+    });
+
+    it('stops every peer when anyone stops', async () => {
+        const { guests, hostEngine, remoteStops } = await openSession(2);
+        await waitFor(() => guests.every((g) => g.session.clockSynced));
+        const before = guests[0].engine.stops;
+        guests[1].session.stop();
+        await waitFor(
+            () =>
+                hostEngine.stops === 1 && guests[0].engine.stops === before + 1,
+        );
+        expect(remoteStops.map((p) => p.name)).toEqual(['Guest 1']);
+    });
+
+    it('catches a late joiner up with the song in progress', async () => {
+        const { guests, host, hostEngine } = await openSession(0);
+        host.run('code', 'song', null);
+        const songStart = hostEngine.startBars[0];
+        const engine = new FakeEngine(Date.now() - BAR_MS * 3.3, 77);
+        const late = await GuestSession.join(
+            engine,
+            {
+                address: '127.0.0.1',
+                pairingCode: host.pairingCode,
+                port: host.port,
+            },
+            'Late',
+            {
+                closed() {},
+                remotePatch() {},
+                remoteStop() {},
+                statusChanged() {},
+            },
+        );
+        closers.push(() => late.leave());
+        expect(guests).toHaveLength(0);
+        await waitFor(() => engine.applied.length === 1);
+        expect(engine.startBars).toEqual([songStart]);
+        expect(engine.applied[0]).toMatchObject({
+            atBar: null,
+            startBar: null,
+        });
     });
 });

@@ -1,19 +1,30 @@
 /**
- * The app's single live share session, if any: hosting or joining one and
- * reporting its state to the renderer.
+ * The app's single live share session, if any: hosting or joining one,
+ * routing this peer's runs and stops through it, and reporting its state to
+ * the renderer.
  */
+import type { QueuedTrigger } from '@modular/core';
+import type { DSLExecuteResult } from '../../shared/ipcTypes';
 import type {
     DiscoveredSession,
     JoinSessionRequest,
     LiveShareStatus,
+    SessionPeer,
 } from '../../shared/liveShare';
 import { advertiseSession, browseSessions } from './discovery';
 import { GuestSession } from './guestSession';
 import { HostSession } from './hostSession';
-import type { SessionEngine } from './sessionEngine';
+import type { SessionEngine, SharedPatch } from './sessionEngine';
 
 export interface LiveShareEvents {
     status(status: LiveShareStatus): void;
+    /** A patch another peer ran applied on this engine. */
+    remotePatch(
+        patch: SharedPatch,
+        result: DSLExecuteResult,
+        author: SessionPeer | null,
+    ): void;
+    remoteStop(by: SessionPeer): void;
     /** The session ended without this peer leaving it. */
     ended(reason: string): void;
 }
@@ -35,7 +46,7 @@ export class LiveShareController {
         private readonly events: LiveShareEvents,
     ) {}
 
-    /** Whether this peer is in a session. */
+    /** Whether this peer is in a session, so runs and stops go through it. */
     get active(): boolean {
         return this.host !== null || this.guest !== null;
     }
@@ -73,6 +84,9 @@ export class LiveShareController {
         try {
             this.host = await HostSession.open(this.engine, name, {
                 peersChanged: () => this.report(),
+                remotePatch: (patch, result) =>
+                    this.events.remotePatch(patch, result, this.author(patch)),
+                remoteStop: (by) => this.events.remoteStop(by),
             });
         } catch (err) {
             this.restoreLink();
@@ -106,6 +120,13 @@ export class LiveShareController {
                             this.report();
                         }
                     },
+                    remotePatch: (patch, result) =>
+                        this.events.remotePatch(
+                            patch,
+                            result,
+                            this.author(patch),
+                        ),
+                    remoteStop: (by) => this.events.remoteStop(by),
                     statusChanged: () => this.report(),
                 },
             );
@@ -122,10 +143,6 @@ export class LiveShareController {
 
     leave(): void {
         this.endSession(true);
-    }
-
-    browse(onChange: (sessions: DiscoveredSession[]) => void): () => void {
-        return browseSessions(onChange);
     }
 
     private endSession(restoreLink: boolean): void {
@@ -152,6 +169,37 @@ export class LiveShareController {
             this.engine.setLinkEnabled(false);
         }
         this.linkBefore = null;
+    }
+
+    run(
+        source: string,
+        sourceId: string | null,
+        trigger: QueuedTrigger | null,
+    ): DSLExecuteResult | Promise<DSLExecuteResult> {
+        if (this.host) {
+            return this.host.run(source, sourceId, trigger);
+        }
+        if (this.guest) {
+            return this.guest.run(source, sourceId, trigger);
+        }
+        throw new Error('Not in a live share session');
+    }
+
+    stop(): void {
+        if (this.host) {
+            this.host.stop();
+        } else if (this.guest) {
+            this.guest.stop();
+        }
+    }
+
+    browse(onChange: (sessions: DiscoveredSession[]) => void): () => void {
+        return browseSessions(onChange);
+    }
+
+    private author(patch: SharedPatch): SessionPeer | null {
+        const peers = this.host?.peers() ?? this.guest?.peers ?? [];
+        return peers.find((p) => p.id === patch.authorId) ?? null;
     }
 
     private report(): void {

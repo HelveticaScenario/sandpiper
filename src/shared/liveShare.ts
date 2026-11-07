@@ -3,7 +3,7 @@
  *
  * One peer hosts: its workspace and its files are the session's. Guests on
  * the local network join with the host's pairing code. Every peer runs its
- * own audio engine, kept in time with the host's over Ableton Link.
+ * own audio engine; the host decides what plays and on which shared bar.
  */
 
 export interface SessionPeer {
