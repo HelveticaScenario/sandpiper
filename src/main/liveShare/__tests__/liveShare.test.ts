@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { encodeFrame, FrameReader } from '../framing';
 import { generatePairingCode, normalizePairingCode } from '../pairingCode';
 import { acceptGuest, joinHost, type MessageChannel } from '../secureChannel';
+import { GuestClock, guestBarOffset, HostClock } from '../sessionClock';
 import { HostSession } from '../hostSession';
 import { GuestSession } from '../guestSession';
+import { BAR_MS, FakeEngine } from './fakeEngine';
 import { waitFor } from './waitFor';
 
 describe('framing', () => {
@@ -122,12 +124,67 @@ describe('secure channel', () => {
     });
 });
 
+describe('session clock', () => {
+    it('splits the difference into whole bars and phase', () => {
+        expect(guestBarOffset(12.52, 1003.5)).toEqual({
+            offset: -991,
+            residual: expect.closeTo(0.02, 6),
+        });
+        expect(guestBarOffset(12.02, 1003.97).offset).toBe(-992);
+    });
+
+    it('adopts an offset only after agreeing heartbeats from a linked peer', () => {
+        const clock = new GuestClock();
+        expect(clock.heartbeat(5.5, 105.5, 0)).toBe(false);
+        expect(clock.heartbeat(5.5, 105.5, 1)).toBe(false);
+        expect(clock.heartbeat(5.6, 105.6, 1)).toBe(false);
+        expect(clock.heartbeat(5.7, 105.69, 1)).toBe(true);
+        expect(clock.offset).toBe(-100);
+        // One stray heartbeat keeps the offset; a run of them drops it.
+        expect(clock.heartbeat(5.8, 105.4, 1)).toBe(false);
+        expect(clock.synced).toBe(true);
+        clock.heartbeat(5.9, 105.5, 1);
+        expect(clock.heartbeat(6.0, 105.6, 1)).toBe(true);
+        expect(clock.synced).toBe(false);
+    });
+
+    it('keeps host bar numbers counting across a Link timeline jump', () => {
+        const clock = new HostClock(40.3, 0);
+        expect(clock.offset).toBe(-40);
+        // Half a bar later at 120 BPM: no jump.
+        expect(clock.sample(40.8, 120, 1_000)).toBe(false);
+        // Link re-maps this peer 7 bars back, keeping the phase.
+        expect(clock.sample(34.3, 120, 2_000)).toBe(true);
+        expect(34.3 + clock.offset).toBeCloseTo(1.3, 6);
+    });
+});
+
 describe('host and guest sessions', () => {
     const closers: (() => void)[] = [];
     afterEach(() => closers.splice(0).forEach((c) => c()));
 
-    async function join(host: HostSession, name: string, events = {}) {
+    const epoch = Date.now() - BAR_MS * 3.3;
+
+    async function open() {
+        const host = await HostSession.open(
+            new FakeEngine(epoch, 500),
+            'Host',
+            {
+                peersChanged() {},
+            },
+        );
+        closers.push(() => host.close());
+        return host;
+    }
+
+    async function join(
+        host: HostSession,
+        name: string,
+        events = {},
+        engine = new FakeEngine(epoch, -20),
+    ) {
         const guest = await GuestSession.join(
+            engine,
             {
                 address: '127.0.0.1',
                 pairingCode: host.pairingCode,
@@ -141,8 +198,7 @@ describe('host and guest sessions', () => {
     }
 
     it('lists everyone who joins and leaves', async () => {
-        const host = await HostSession.open('Host', { peersChanged() {} });
-        closers.push(() => host.close());
+        const host = await open();
         const first = await join(host, 'Guest 0');
         const second = await join(host, 'Guest 1');
         await waitFor(() => first.peers.length === 3);
@@ -158,10 +214,10 @@ describe('host and guest sessions', () => {
     });
 
     it('turns away a guest with the wrong code', async () => {
-        const host = await HostSession.open('Host', { peersChanged() {} });
-        closers.push(() => host.close());
+        const host = await open();
         await expect(
             GuestSession.join(
+                new FakeEngine(epoch, 0),
                 {
                     address: '127.0.0.1',
                     pairingCode: 'NOPE-NOPE',
@@ -175,12 +231,31 @@ describe('host and guest sessions', () => {
     });
 
     it('tells guests when the host ends the session', async () => {
-        const host = await HostSession.open('Host', { peersChanged() {} });
+        const host = await HostSession.open(new FakeEngine(epoch, 0), 'Host', {
+            peersChanged() {},
+        });
         let ended = '';
         await join(host, 'Guest', {
             closed: (reason: string) => (ended = reason),
         });
         host.close();
         await waitFor(() => ended !== '');
+    });
+
+    it('syncs a guest whose Link has found the host', async () => {
+        const host = await open();
+        const guests = await Promise.all([join(host, 'A'), join(host, 'B')]);
+        await waitFor(() => guests.every((g) => g.clockSynced));
+    });
+
+    it('keeps a guest out of sync until its Link finds a peer', async () => {
+        const host = await open();
+        const engine = new FakeEngine(epoch, 7);
+        engine.linkPeers = 0;
+        const guest = await join(host, 'Alone', {}, engine);
+        await new Promise((resolve) => setTimeout(resolve, 1_200));
+        expect(guest.clockSynced).toBe(false);
+        engine.linkPeers = 1;
+        await waitFor(() => guest.clockSynced);
     });
 });

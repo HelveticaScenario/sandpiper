@@ -4,6 +4,7 @@ import { VideoBackdrop } from './app/video/VideoBackdrop';
 import { PerformancePreview } from './app/video/PerformancePreview';
 import { PerformancePanel } from './components/PerformancePanel';
 import { LiveShareModal } from './components/LiveShareModal';
+import { useLiveShareStatus } from './hooks/useLiveShareStatus';
 import { usePerformanceCode } from './performance/usePerformanceCode';
 import { performanceOutput } from './video/PerformanceOutput';
 import { AudioControls } from './components/AudioControls';
@@ -176,6 +177,7 @@ function App() {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
     const [isLiveShareOpen, setIsLiveShareOpen] = useState(false);
+    const liveShareStatus = useLiveShareStatus();
     const [isPaletteOpen, setIsPaletteOpen] = useState(false);
     const [isModuleProfileOpen, setIsModuleProfileOpen] = useState(false);
     const [migrationState, setMigrationState] = useState<{
@@ -1803,6 +1805,19 @@ function App() {
         eqController,
     ]);
 
+    // Opening or leaving a live session turns Link on or off from the main
+    // process; read the transport so the Link button reflects it even while
+    // nothing is polling.
+    useEffect(() => {
+        let cancelled = false;
+        void electronAPI.synthesizer.getTransportState().then((t) => {
+            if (!cancelled) setTransport(t);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [liveShareStatus.role]);
+
     // Keep Link phase indicator live while Link is enabled but Shoreline is stopped.
     // The main tick loop only runs when isClockRunning; this fills the gap so
     // the phase indicator stays animated even before the user presses play.
@@ -2778,6 +2793,7 @@ function App() {
         <div className="app">
             <header className="app-header">
                 <TransportDisplay
+                    linkLocked={liveShareStatus.role !== 'idle'}
                     onToggleLink={(enabled) => {
                         void electronAPI.synthesizer.enableLink(enabled);
                         // Optimistically update UI — polling only runs while playing

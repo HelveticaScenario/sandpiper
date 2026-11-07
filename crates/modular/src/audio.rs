@@ -3225,6 +3225,8 @@ pub struct TransportMeter {
     /// Armed for a quantized start — waiting for a Link bar boundary before
     /// playback actually begins. While true, `is_playing` is still false.
     link_pending_start: AtomicBool,
+    /// Link bars (beats / quantum) at the start of the latest buffer
+    link_bars_bits: AtomicU64,
 }
 
 impl Default for TransportMeter {
@@ -3244,6 +3246,7 @@ impl Default for TransportMeter {
             link_peers: AtomicU32::new(0),
             link_phase_bits: AtomicU64::new(0f64.to_bits()),
             link_pending_start: AtomicBool::new(false),
+            link_bars_bits: AtomicU64::new(0f64.to_bits()),
         }
     }
 }
@@ -3327,6 +3330,12 @@ impl TransportMeter {
         self.link_pending_start.store(armed, Ordering::Relaxed);
     }
 
+    /// Write the Link bar position at the start of the latest buffer.
+    #[inline]
+    pub fn write_link_bars(&self, bars: f64) {
+        self.link_bars_bits.store(bars.to_bits(), Ordering::Relaxed);
+    }
+
     /// Read the current Link enabled flag (used by the main thread for
     /// idempotency checks before constructing/destroying Link resources).
     #[inline]
@@ -3359,6 +3368,7 @@ impl TransportMeter {
             link_peers: self.link_peers.load(Ordering::Relaxed),
             link_phase: f64::from_bits(self.link_phase_bits.load(Ordering::Relaxed)),
             link_pending_start: self.link_pending_start.load(Ordering::Relaxed),
+            link_bars: f64::from_bits(self.link_bars_bits.load(Ordering::Relaxed)),
         }
     }
 }
@@ -3397,6 +3407,11 @@ pub struct TransportSnapshot {
     /// thread is waiting for the next Link bar boundary before actually
     /// flipping `is_playing`. Only meaningful when `link_enabled` is true.
     pub link_pending_start: bool,
+    /// Position on this peer's Link timeline in bars (beats / 4) at the start
+    /// of the latest audio buffer. Peers' positions differ by whole bars; a
+    /// live session uses the difference to share bar numbers. Only meaningful
+    /// when `link_enabled` is true.
+    pub link_bars: f64,
 }
 
 #[cfg(test)]

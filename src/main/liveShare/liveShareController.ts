@@ -10,6 +10,7 @@ import type {
 import { advertiseSession, browseSessions } from './discovery';
 import { GuestSession } from './guestSession';
 import { HostSession } from './hostSession';
+import type { SessionEngine } from './sessionEngine';
 
 export interface LiveShareEvents {
     status(status: LiveShareStatus): void;
@@ -22,11 +23,22 @@ export class LiveShareController {
     private guest: GuestSession | null = null;
     private joining: string | null = null;
     private stopAdvertising: (() => void) | null = null;
+    /**
+     * Whether Link was on before this peer entered a session, so leaving
+     * the session puts it back; null outside a session.
+     */
+    private linkBefore: boolean | null = null;
 
     constructor(
+        private readonly engine: SessionEngine,
         private readonly displayName: () => string,
         private readonly events: LiveShareEvents,
     ) {}
+
+    /** Whether this peer is in a session. */
+    get active(): boolean {
+        return this.host !== null || this.guest !== null;
+    }
 
     status(): LiveShareStatus {
         if (this.host) {
@@ -41,6 +53,7 @@ export class LiveShareController {
         }
         if (this.guest) {
             return {
+                clockSynced: this.guest.clockSynced,
                 hostName: this.guest.hostName,
                 peers: this.guest.peers,
                 role: 'guest',
@@ -54,11 +67,17 @@ export class LiveShareController {
     }
 
     async hostSession(): Promise<LiveShareStatus> {
-        this.leave();
+        this.endSession(false);
+        this.rememberLink();
         const name = this.displayName();
-        this.host = await HostSession.open(name, {
-            peersChanged: () => this.report(),
-        });
+        try {
+            this.host = await HostSession.open(this.engine, name, {
+                peersChanged: () => this.report(),
+            });
+        } catch (err) {
+            this.restoreLink();
+            throw err;
+        }
         this.stopAdvertising = advertiseSession(
             this.host.sessionId,
             name,
@@ -69,21 +88,31 @@ export class LiveShareController {
     }
 
     async joinSession(request: JoinSessionRequest): Promise<LiveShareStatus> {
-        this.leave();
+        this.endSession(false);
+        this.rememberLink();
         this.joining = request.address;
         this.report();
         try {
-            const guest = await GuestSession.join(request, this.displayName(), {
-                closed: (reason) => {
-                    if (this.guest === guest) {
-                        this.guest = null;
-                        this.events.ended(reason);
-                        this.report();
-                    }
+            const guest = await GuestSession.join(
+                this.engine,
+                request,
+                this.displayName(),
+                {
+                    closed: (reason) => {
+                        if (this.guest === guest) {
+                            this.guest = null;
+                            this.restoreLink();
+                            this.events.ended(reason);
+                            this.report();
+                        }
+                    },
+                    statusChanged: () => this.report(),
                 },
-                statusChanged: () => this.report(),
-            });
+            );
             this.guest = guest;
+        } catch (err) {
+            this.restoreLink();
+            throw err;
         } finally {
             this.joining = null;
             this.report();
@@ -92,6 +121,14 @@ export class LiveShareController {
     }
 
     leave(): void {
+        this.endSession(true);
+    }
+
+    browse(onChange: (sessions: DiscoveredSession[]) => void): () => void {
+        return browseSessions(onChange);
+    }
+
+    private endSession(restoreLink: boolean): void {
         this.stopAdvertising?.();
         this.stopAdvertising = null;
         this.host?.close();
@@ -99,11 +136,22 @@ export class LiveShareController {
         const guest = this.guest;
         this.guest = null;
         guest?.leave();
+        if (restoreLink) {
+            this.restoreLink();
+        }
         this.report();
     }
 
-    browse(onChange: (sessions: DiscoveredSession[]) => void): () => void {
-        return browseSessions(onChange);
+    private rememberLink(): void {
+        this.linkBefore ??= this.engine.transport().linkEnabled;
+    }
+
+    /** Turn Link back off if the session turned it on. */
+    private restoreLink(): void {
+        if (this.linkBefore === false) {
+            this.engine.setLinkEnabled(false);
+        }
+        this.linkBefore = null;
     }
 
     private report(): void {

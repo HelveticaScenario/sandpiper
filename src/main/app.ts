@@ -74,6 +74,7 @@ import {
 } from './performanceWindow';
 import { executePatchScript } from './dsl/executor';
 import { LiveShareController } from './liveShare/liveShareController';
+import type { SessionEngine } from './liveShare/sessionEngine';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
 import * as fs from 'fs';
@@ -1169,7 +1170,14 @@ function sendToRenderer(channel: string, ...args: unknown[]): void {
     }
 }
 
+/** This peer's engine as a live share session drives it. */
+const sessionEngine: SessionEngine = {
+    setLinkEnabled: (enabled) => synth.enableLink(enabled),
+    transport: () => synth.getTransportState(),
+};
+
 const liveShare = new LiveShareController(
+    sessionEngine,
     () => os.userInfo().username || os.hostname(),
     {
         ended: (reason) =>
@@ -1324,6 +1332,10 @@ registerIPCHandler('SYNTH_GET_TRANSPORT_STATE', () =>
 );
 
 registerIPCHandler('SYNTH_ENABLE_LINK', (enabled: boolean) => {
+    // A live session keeps time over Link, so Link stays on while it lasts.
+    if (!enabled && liveShare.active) {
+        return;
+    }
     synth.enableLink(enabled);
 });
 
