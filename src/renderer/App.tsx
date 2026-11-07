@@ -2389,6 +2389,20 @@ function App() {
             { label: 'Open Settings', category: 'Preferences' },
         );
         registerCommand(
+            'shoreline.openEngineHealth',
+            () => {
+                setIsEngineHealthOpen(true);
+            },
+            { label: 'Engine Health…', category: 'View' },
+        );
+        registerCommand(
+            'shoreline.openModuleProfile',
+            () => {
+                setIsModuleProfileOpen(true);
+            },
+            { label: 'Module Profile…', category: 'View' },
+        );
+        registerCommand(
             'shoreline.showCommandPalette',
             () => {
                 setIsPaletteOpen(true);
@@ -2455,6 +2469,8 @@ function App() {
             unregisterCommand('shoreline.save');
             unregisterCommand('shoreline.openWorkspace');
             unregisterCommand('shoreline.openSettings');
+            unregisterCommand('shoreline.openEngineHealth');
+            unregisterCommand('shoreline.openModuleProfile');
             unregisterCommand('shoreline.showCommandPalette');
             unregisterCommand('shoreline.openKeybindings');
         };
@@ -2539,12 +2555,12 @@ function App() {
         });
         const cleanupOpenEngineHealth = electronAPI.onMenuOpenEngineHealth(
             () => {
-                setIsEngineHealthOpen(true);
+                executeCommand('shoreline.openEngineHealth');
             },
         );
         const cleanupOpenModuleProfile = electronAPI.onMenuOpenModuleProfile(
             () => {
-                setIsModuleProfileOpen(true);
+                executeCommand('shoreline.openModuleProfile');
             },
         );
         const cleanupMigrateBuffer = electronAPI.onMenuMigrateBuffer(() => {
