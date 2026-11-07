@@ -217,7 +217,6 @@ fn mode_param_accepts_once_loop_and_gate() {
         );
     }
     assert!(try_params(params_with(json!({ "mode": "hold" }))).is_err());
-    assert!(try_params(params_with(json!({ "loop": true }))).is_err());
 }
 
 #[test]

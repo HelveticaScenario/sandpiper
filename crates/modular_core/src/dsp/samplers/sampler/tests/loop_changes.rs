@@ -155,8 +155,9 @@ fn held_loop_never_stays_silent_under_live_changes() {
                     })
                 };
             } else if r < 0.85 {
-                sampler.params.mode = match sampler.params.mode {
-                    SamplerMode::Loop => SamplerMode::Once,
+                sampler.params.mode = match (rnd() * 3.0) as usize {
+                    0 => SamplerMode::Once,
+                    1 => SamplerMode::Gate,
                     _ => SamplerMode::Loop,
                 };
             } else {

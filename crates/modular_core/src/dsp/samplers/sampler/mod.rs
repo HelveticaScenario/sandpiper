@@ -81,7 +81,12 @@ enum SamplerMode {
 }
 
 impl SamplerMode {
-    fn releases_on_gate_fall(self) -> bool {
+    fn loops(self) -> bool {
+        self == SamplerMode::Loop
+    }
+
+    /// Playback stops while the gate is low.
+    fn follows_gate(self) -> bool {
         matches!(self, SamplerMode::Loop | SamplerMode::Gate)
     }
 }
@@ -188,21 +193,22 @@ impl Sampler {
         let speed = self.params.speed.value_or(1.0) as f64;
         let advance = speed * self.state.rate_ratio;
         // A retrigger releases the voice still playing so the jump to the
-        // new onset crossfades instead of clicking. `playing` lags the
+        // new onset crossfades instead of clicking, and a mode that follows
+        // the gate releases it while the gate is low. `playing` lags the
         // position by one sample (the span-exit check runs after edge
         // detection), so also require the position to still be in the span:
         // an exited voice is silent and must not displace a live release.
-        let releases =
-            edge.is_rising() || (edge.is_falling() && self.params.mode.releases_on_gate_fall());
-        if releases && self.state.playing && self.state.main.in_span() {
-            self.release(advance, max_frame);
+        let retrigger = edge.is_rising();
+        let gate_off = !gate_high && self.params.mode.follows_gate();
+        if (retrigger || gate_off) && self.state.playing && self.state.main.in_span() {
+            self.release(advance, max_frame, retrigger);
         }
         if edge.is_rising() {
             let (lo, hi) = self.window(frame_count, max_frame);
             self.start_pass(lo, hi, speed, max_frame);
         }
 
-        let holding = self.looping() && gate_high;
+        let holding = self.params.mode.loops() && gate_high;
         if self.state.playing && !self.state.playing_out {
             if holding {
                 self.loop_seam(advance, frame_count, max_frame);
@@ -286,7 +292,7 @@ impl Sampler {
         // Both edges fade by default. A loop pass sounds at full gain up to
         // the edge it heads for instead: the seam's crossfade, or the
         // play-out fade, sets that ramp.
-        if self.looping() {
+        if self.params.mode.loops() {
             if speed < 0.0 {
                 self.state.main.lo_ramp = Ramp::Frames(0.0);
             } else {
@@ -294,18 +300,18 @@ impl Sampler {
             }
         }
         self.state.playing = true;
-        self.state.playing_out = !self.looping();
-    }
-
-    fn looping(&self) -> bool {
-        self.params.mode == SamplerMode::Loop
+        self.state.playing_out = !self.params.mode.loops();
     }
 
     /// The main pass becomes a release voice that fades out over the fade
     /// time, or sooner at the window edge of a pass already playing out, so
     /// a retrigger crossfades with it. A silent voice has nothing to release
     /// and must not displace a live release.
-    fn release(&mut self, advance: f64, max_frame: f64) {
+    ///
+    /// A retrigger release fades by its span ramp, which mirrors the new
+    /// pass's fade-in at any speed so the two sum to unity; a gate release
+    /// is timed, so it ends within the fade time however the speed changes.
+    fn release(&mut self, advance: f64, max_frame: f64, retrigger: bool) {
         self.state.playing = false;
         let mut voice = self.state.main;
         let fade = self.state.fade_frames;
@@ -314,10 +320,12 @@ impl Sampler {
             return;
         }
         voice.fade_out(advance >= 0.0, fade, max_frame, self.state.playing_out);
-        push_release(
-            &mut self.state.rels,
-            Release::timed(voice, gain, self.state.fade_out_samples),
-        );
+        let release = if retrigger {
+            Release::new(voice, advance)
+        } else {
+            Release::timed(voice, gain, self.state.fade_out_samples)
+        };
+        push_release(&mut self.state.rels, release);
     }
 
     /// The playback window in WAV frames for the slice signal's current
@@ -346,14 +354,14 @@ impl Sampler {
                 let slice_hi = end_p * frame_count as f64;
                 // A looping window ends exactly where the next slice (or the
                 // file) begins, so the repeat period is the slice length.
-                let slice_hi = if self.looping() {
+                let slice_hi = if self.params.mode.loops() {
                     slice_hi
                 } else {
                     slice_hi.min(max_frame)
                 };
                 (slice_lo + frac * (slice_hi - slice_lo), slice_hi)
             }
-            None if self.looping() => (0.0, frame_count as f64),
+            None if self.params.mode.loops() => (0.0, frame_count as f64),
             None => (0.0, max_frame),
         }
     }
