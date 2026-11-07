@@ -4,6 +4,7 @@ import {
     MenuItem,
     app,
     autoUpdater,
+    clipboard,
     dialog,
     globalShortcut,
     ipcMain,
@@ -72,6 +73,7 @@ import {
     trackPerformanceWindow,
 } from './performanceWindow';
 import { executePatchScript } from './dsl/executor';
+import { LiveShareController } from './liveShare/liveShareController';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
 import * as fs from 'fs';
@@ -1161,6 +1163,40 @@ registerIPCHandler(
     },
 );
 
+function sendToRenderer(channel: string, ...args: unknown[]): void {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(channel, ...args);
+    }
+}
+
+const liveShare = new LiveShareController(
+    () => os.userInfo().username || os.hostname(),
+    {
+        ended: (reason) =>
+            sendToRenderer(IPC_CHANNELS.LIVE_SHARE_ON_ENDED, reason),
+        status: (status) =>
+            sendToRenderer(IPC_CHANNELS.LIVE_SHARE_ON_STATUS, status),
+    },
+);
+
+let stopBrowsingSessions: (() => void) | null = null;
+registerIPCHandler('LIVE_SHARE_GET_STATUS', () => liveShare.status());
+registerIPCHandler('LIVE_SHARE_HOST', () => liveShare.hostSession());
+registerIPCHandler('LIVE_SHARE_JOIN', (request) =>
+    liveShare.joinSession(request),
+);
+registerIPCHandler('LIVE_SHARE_LEAVE', () => liveShare.leave());
+registerIPCHandler('LIVE_SHARE_BROWSE', () => {
+    stopBrowsingSessions?.();
+    stopBrowsingSessions = liveShare.browse((sessions) =>
+        sendToRenderer(IPC_CHANNELS.LIVE_SHARE_ON_DISCOVERED, sessions),
+    );
+});
+registerIPCHandler('LIVE_SHARE_STOP_BROWSING', () => {
+    stopBrowsingSessions?.();
+    stopBrowsingSessions = null;
+});
+
 registerIPCHandler('VIDEO_GET_SHADER', () => getVideoShader());
 setVideoTapSource({
     read: (tap, since) => synth.getVideoTapChunk(tap, since),
@@ -1301,6 +1337,10 @@ registerIPCHandler('SYNTH_RESTART_AUDIO', () => {
 });
 
 registerIPCHandler('SYNTH_PANIC_LOG_DIR', () => synth.panicLogDir());
+
+registerIPCHandler('CLIPBOARD_WRITE_TEXT', (text) => {
+    clipboard.writeText(text);
+});
 
 registerIPCHandler('SHELL_OPEN_PATH', async (targetPath: string) => {
     // Ensure the directory exists before opening — the panic log dir is
@@ -2332,6 +2372,20 @@ const createMenu = (): void => {
                     label: 'Close Buffer',
                 },
                 { type: 'separator' },
+                {
+                    accelerator:
+                        menuAccelerator('shoreline.liveShare', '') || undefined,
+                    click: () => {
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.OPEN_LIVE_SHARE,
+                            );
+                        }
+                    },
+                    label: 'Live Share...',
+                    registerAccelerator: false,
+                },
+                { type: 'separator' },
                 ...(isMac
                     ? []
                     : ([
@@ -2674,6 +2728,7 @@ app.on('ready', () => {
 
 app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    liveShare.leave();
     openFileWatcher.close();
     syphonBridge?.dispose();
 });

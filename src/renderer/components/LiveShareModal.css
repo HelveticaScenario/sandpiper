@@ -1,0 +1,191 @@
+.live-share-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.live-share-modal {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    width: 400px;
+    max-width: 90vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    outline: none;
+}
+
+.live-share-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-default);
+}
+
+.live-share-header h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.live-share-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 4px;
+}
+
+.live-share-close-btn:hover {
+    color: var(--text-primary);
+}
+
+.live-share-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    font-family: var(--font-mono);
+    font-size: calc(var(--font-size) - 1px);
+    color: var(--text-primary);
+}
+
+.live-share-section {
+    margin-bottom: var(--sp-2);
+}
+
+.live-share-section h3 {
+    margin: 0 0 var(--sp-half);
+    font-size: calc(var(--font-size) - 2px);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.live-share-note {
+    margin: 0 0 var(--sp-half);
+    color: var(--text-secondary);
+}
+
+.live-share-error {
+    margin: var(--sp-1) 0 0;
+    color: var(--color-error);
+}
+
+.live-share-copy {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-1);
+    width: 100%;
+    margin: 0 0 var(--sp-half);
+    padding: 2px var(--sp-half);
+    font-family: var(--font-mono);
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    user-select: text;
+}
+
+.live-share-copy:hover {
+    border-color: var(--border-default);
+    background: var(--bg-hover);
+}
+
+.live-share-copy-hint {
+    font-size: calc(var(--font-size) - 2px);
+    color: var(--text-muted);
+    visibility: hidden;
+}
+
+.live-share-copy.copied .live-share-copy-hint,
+.live-share-copy:hover .live-share-copy-hint,
+.live-share-copy:focus-visible .live-share-copy-hint {
+    visibility: visible;
+}
+
+.live-share-code {
+    font-size: calc(var(--font-size) + 6px);
+    letter-spacing: 0.12em;
+    color: var(--accent-primary);
+}
+
+.live-share-address {
+    font-size: calc(var(--font-size) - 1px);
+    color: var(--text-primary);
+}
+
+.live-share-button,
+.live-share-session {
+    width: 100%;
+    margin-bottom: var(--sp-half);
+    padding: var(--sp-half) var(--sp-1);
+    font-family: var(--font-mono);
+    font-size: calc(var(--font-size) - 1px);
+    color: var(--text-primary);
+    text-align: left;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.live-share-button {
+    text-align: center;
+}
+
+.live-share-button:hover:not(:disabled),
+.live-share-session:hover {
+    background: var(--bg-hover);
+}
+
+.live-share-button:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.live-share-session.selected {
+    border-color: var(--accent-primary);
+}
+
+.live-share-input {
+    box-sizing: border-box;
+    width: 100%;
+    margin-bottom: var(--sp-half);
+    padding: var(--sp-half) var(--sp-1);
+    font-family: var(--font-mono);
+    font-size: calc(var(--font-size) - 1px);
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+}
+
+.live-share-list {
+    margin: 0 0 var(--sp-half);
+    padding: 0;
+    list-style: none;
+}
+
+.live-share-peer {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-half);
+    padding: 2px 0;
+}
+
+.live-share-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}

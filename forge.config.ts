@@ -29,8 +29,8 @@ const config: ForgeConfig = {
         executableName: 'Shoreline',
         extendInfo: {
             NSLocalNetworkUsageDescription:
-                'Shoreline uses the local network to sync tempo with other music apps via Ableton Link.',
-            NSBonjourServices: ['_SessionStatus._tcp'],
+                'Shoreline uses the local network to sync tempo with other music apps via Ableton Link and to find and join live share sessions.',
+            NSBonjourServices: ['_SessionStatus._tcp', '_shoreline-share._tcp'],
             NSCameraUsageDescription:
                 'Shoreline shows the camera in video patches that use $v.camera.',
         },

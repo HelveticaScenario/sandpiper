@@ -19,6 +19,11 @@ import {
 } from '../shared/ipcTypes';
 import type { FileChange, QueuedTrigger } from '../shared/ipcTypes';
 import type {
+    DiscoveredSession,
+    JoinSessionRequest,
+    LiveShareStatus,
+} from '../shared/liveShare';
+import type {
     VideoCvValue,
     VideoPull,
     VideoRestart,
@@ -217,6 +222,7 @@ export interface ElectronAPI {
     onMenuOpenSettings: (callback: () => void) => () => void;
     onMenuOpenEngineHealth: (callback: () => void) => () => void;
     onMenuOpenModuleProfile: (callback: () => void) => () => void;
+    onMenuOpenLiveShare: (callback: () => void) => () => void;
     onMenuMigrateBuffer: (callback: () => void) => () => void;
     onMenuMigrateWavetable: (callback: () => void) => () => void;
     onMenuMigrateChebyBlockDC: (callback: () => void) => () => void;
@@ -301,6 +307,25 @@ export interface ElectronAPI {
     // OS shell operations
     shell: {
         openPath: Promisify<IPCHandlers[typeof IPC_CHANNELS.SHELL_OPEN_PATH]>;
+    };
+
+    clipboard: {
+        writeText: (text: string) => Promise<void>;
+    };
+
+    // Live share sessions
+    liveShare: {
+        getStatus: () => Promise<LiveShareStatus>;
+        host: () => Promise<LiveShareStatus>;
+        join: (request: JoinSessionRequest) => Promise<LiveShareStatus>;
+        leave: () => Promise<void>;
+        browse: () => Promise<void>;
+        stopBrowsing: () => Promise<void>;
+        onStatus: (callback: (status: LiveShareStatus) => void) => () => void;
+        onDiscovered: (
+            callback: (sessions: DiscoveredSession[]) => void,
+        ) => () => void;
+        onEnded: (callback: (reason: string) => void) => () => void;
     };
 
     // Update operations
@@ -517,6 +542,7 @@ const electronAPI: ElectronAPI = {
     ),
     onMenuOpenSettings: menuEventHandler(MENU_CHANNELS.OPEN_SETTINGS),
     onMenuOpenEngineHealth: menuEventHandler(MENU_CHANNELS.OPEN_ENGINE_HEALTH),
+    onMenuOpenLiveShare: menuEventHandler(MENU_CHANNELS.OPEN_LIVE_SHARE),
     onMenuOpenModuleProfile: menuEventHandler(
         MENU_CHANNELS.OPEN_MODULE_PROFILE,
     ),
@@ -589,6 +615,27 @@ const electronAPI: ElectronAPI = {
     // OS shell operations
     shell: {
         openPath: (...args) => invokeIPC('SHELL_OPEN_PATH', ...args),
+    },
+
+    clipboard: {
+        writeText: (text) => invokeIPC('CLIPBOARD_WRITE_TEXT', text),
+    },
+
+    // Live share sessions
+    liveShare: {
+        browse: () => invokeIPC('LIVE_SHARE_BROWSE'),
+        getStatus: () => invokeIPC('LIVE_SHARE_GET_STATUS'),
+        host: () => invokeIPC('LIVE_SHARE_HOST'),
+        join: (request) => invokeIPC('LIVE_SHARE_JOIN', request),
+        leave: () => invokeIPC('LIVE_SHARE_LEAVE'),
+        onDiscovered: menuEventHandler<[DiscoveredSession[]]>(
+            IPC_CHANNELS.LIVE_SHARE_ON_DISCOVERED,
+        ),
+        onEnded: menuEventHandler<[string]>(IPC_CHANNELS.LIVE_SHARE_ON_ENDED),
+        onStatus: menuEventHandler<[LiveShareStatus]>(
+            IPC_CHANNELS.LIVE_SHARE_ON_STATUS,
+        ),
+        stopBrowsing: () => invokeIPC('LIVE_SHARE_STOP_BROWSING'),
     },
 
     // Update operations

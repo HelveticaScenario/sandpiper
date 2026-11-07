@@ -3,6 +3,7 @@ import { MonacoPatchEditor as PatchEditor } from './components/MonacoPatchEditor
 import { VideoBackdrop } from './app/video/VideoBackdrop';
 import { PerformancePreview } from './app/video/PerformancePreview';
 import { PerformancePanel } from './components/PerformancePanel';
+import { LiveShareModal } from './components/LiveShareModal';
 import { usePerformanceCode } from './performance/usePerformanceCode';
 import { performanceOutput } from './video/PerformanceOutput';
 import { AudioControls } from './components/AudioControls';
@@ -174,6 +175,7 @@ function App() {
     const [isRecording, setIsRecording] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
+    const [isLiveShareOpen, setIsLiveShareOpen] = useState(false);
     const [isPaletteOpen, setIsPaletteOpen] = useState(false);
     const [isModuleProfileOpen, setIsModuleProfileOpen] = useState(false);
     const [migrationState, setMigrationState] = useState<{
@@ -2229,6 +2231,14 @@ function App() {
     }, []);
     const handleStop = useCallback(() => handleStopRef.current(), []);
 
+    useEffect(
+        () =>
+            electronAPI.liveShare.onEnded((reason) =>
+                setError(`Live share session ended: ${reason}`),
+            ),
+        [],
+    );
+
     const dismissError = useCallback(() => {
         setError(null);
         setValidationErrors(null);
@@ -2389,6 +2399,13 @@ function App() {
             { label: 'Open Settings', category: 'Preferences' },
         );
         registerCommand(
+            'shoreline.liveShare',
+            () => {
+                setIsLiveShareOpen(true);
+            },
+            { label: 'Live Share…', category: 'Session' },
+        );
+        registerCommand(
             'shoreline.showCommandPalette',
             () => {
                 setIsPaletteOpen(true);
@@ -2455,6 +2472,7 @@ function App() {
             unregisterCommand('shoreline.save');
             unregisterCommand('shoreline.openWorkspace');
             unregisterCommand('shoreline.openSettings');
+            unregisterCommand('shoreline.liveShare');
             unregisterCommand('shoreline.showCommandPalette');
             unregisterCommand('shoreline.openKeybindings');
         };
@@ -2547,6 +2565,9 @@ function App() {
                 setIsModuleProfileOpen(true);
             },
         );
+        const cleanupOpenLiveShare = electronAPI.onMenuOpenLiveShare(() => {
+            executeCommand('shoreline.liveShare');
+        });
         const cleanupMigrateBuffer = electronAPI.onMenuMigrateBuffer(() => {
             const ed = editorRef.current;
             // Read the live id from the ref: this listener is registered once
@@ -2685,6 +2706,7 @@ function App() {
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
             cleanupOpenModuleProfile();
+            cleanupOpenLiveShare();
             cleanupMigrateBuffer();
             cleanupMigrateWavetable();
             cleanupMigrateChebyBlockDC();
@@ -2791,6 +2813,11 @@ function App() {
             <Settings
                 isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}
+            />
+
+            <LiveShareModal
+                isOpen={isLiveShareOpen}
+                onClose={() => setIsLiveShareOpen(false)}
             />
 
             <EngineHealth
