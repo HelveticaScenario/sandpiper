@@ -307,3 +307,29 @@ fn switching_to_gate_mode_with_the_gate_low_releases_the_pass() {
     assert_eq!(*out.last().unwrap(), 0.0);
     assert!(!sampler.state.playing);
 }
+
+#[test]
+fn once_retrigger_without_a_fade_cuts_to_the_new_pass() {
+    let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8, 0.2, 0.4]]);
+    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 0.0 })), wav_data);
+    assert_close(&run(&mut sampler, 3), &[1.0, 2.0, 3.0]);
+    set_gate(&mut sampler, 0.0);
+    sampler.update(SAMPLE_RATE);
+    set_gate(&mut sampler, 5.0);
+    assert_close(&run(&mut sampler, 2), &[1.0, 2.0]);
+    assert!(!releasing(&sampler));
+}
+
+#[test]
+fn sub_sample_fade_still_releases_over_a_sample() {
+    let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
+    let mut sampler = make_direct(
+        params_with(json!({ "gate": 5.0, "mode": "gate", "fade": 0.01 })),
+        wav_data,
+    );
+    run(&mut sampler, 100);
+    set_gate(&mut sampler, 0.0);
+    let out = run(&mut sampler, 3);
+    assert!(out[0] > 0.0, "the release must sound, got {out:?}");
+    assert_eq!(out[2], 0.0);
+}

@@ -203,7 +203,7 @@ impl Sampler {
         if (retrigger || gate_off) && self.state.playing && self.state.main.in_span() {
             self.release(advance, max_frame, retrigger);
         }
-        if edge.is_rising() {
+        if retrigger {
             let (lo, hi) = self.window(frame_count, max_frame);
             self.start_pass(lo, hi, speed, max_frame);
         }
@@ -306,17 +306,19 @@ impl Sampler {
     /// The main pass becomes a release voice that fades out over the fade
     /// time, or sooner at the window edge of a pass already playing out, so
     /// a retrigger crossfades with it. A silent voice has nothing to release
-    /// and must not displace a live release.
+    /// and must not displace a live release, and without a fade the pass
+    /// stops dead.
     ///
     /// A retrigger release fades by its span ramp, which mirrors the new
-    /// pass's fade-in at any speed so the two sum to unity; a gate release
-    /// is timed, so it ends within the fade time however the speed changes.
+    /// pass's fade-in at any speed so the crossfade never dips; a gate
+    /// release is timed, so it ends within the fade time however the speed
+    /// changes.
     fn release(&mut self, advance: f64, max_frame: f64, retrigger: bool) {
         self.state.playing = false;
         let mut voice = self.state.main;
         let fade = self.state.fade_frames;
         let gain = voice.gain(fade);
-        if gain <= 0.0 {
+        if gain <= 0.0 || fade <= 0.0 {
             return;
         }
         voice.fade_out(advance >= 0.0, fade, max_frame, self.state.playing_out);
@@ -380,7 +382,14 @@ impl crate::types::PatchUpdateHandler for Sampler {
         };
         let fade_secs = self.params.fade / 1000.0;
         self.state.fade_frames = fade_secs * wav_rate;
-        self.state.fade_out_samples = (fade_secs * engine_rate).round() as u32;
+        // A fade shorter than a sample still lasts one, so a timed release
+        // never ends before it sounds.
+        let fade_out_samples = (fade_secs * engine_rate).round() as u32;
+        self.state.fade_out_samples = if self.params.fade > 0.0 {
+            fade_out_samples.max(1)
+        } else {
+            0
+        };
     }
 }
 
