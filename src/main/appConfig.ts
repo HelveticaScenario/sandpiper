@@ -30,6 +30,7 @@ export const AppConfigSchema = z.object({
     fontSize: z.number().min(8).max(72).optional(),
     lastOpenedFolder: z.string().optional(),
     prettier: z.record(z.string(), z.unknown()).optional(),
+    sessionName: z.string().max(40).optional(),
     skippedUpdateVersion: z.string().optional(),
     theme: z.string().optional(),
     codeBackdropOpacity: z.number().min(0).max(1).optional(),

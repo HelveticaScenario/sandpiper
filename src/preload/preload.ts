@@ -18,6 +18,7 @@ import {
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { FileChange, QueuedTrigger } from '../shared/ipcTypes';
+import type { SessionState } from '../shared/session';
 import type {
     VideoCvValue,
     VideoPull,
@@ -316,6 +317,20 @@ export interface ElectronAPI {
         onDownloaded: (callback: () => void) => () => void;
         onError: (callback: (message: string) => void) => () => void;
     };
+
+    // Live session operations
+    session: {
+        getState: Promisify<IPCHandlers[typeof IPC_CHANNELS.SESSION_GET_STATE]>;
+        getName: Promisify<IPCHandlers[typeof IPC_CHANNELS.SESSION_GET_NAME]>;
+        start: Promisify<IPCHandlers[typeof IPC_CHANNELS.SESSION_START]>;
+        join: Promisify<IPCHandlers[typeof IPC_CHANNELS.SESSION_JOIN]>;
+        leave: Promisify<IPCHandlers[typeof IPC_CHANNELS.SESSION_LEAVE]>;
+        copyInvite: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SESSION_COPY_INVITE]
+        >;
+        onState: (callback: (state: SessionState) => void) => () => void;
+    };
+    onMenuOpenSession: (callback: () => void) => () => void;
 }
 
 const electronAPI: ElectronAPI = {
@@ -604,6 +619,19 @@ const electronAPI: ElectronAPI = {
         onPreparing: menuEventHandler(IPC_CHANNELS.UPDATE_PREPARING),
         onError: menuEventHandler<[string]>(IPC_CHANNELS.UPDATE_ERROR),
     },
+
+    session: {
+        copyInvite: (...args) => invokeIPC('SESSION_COPY_INVITE', ...args),
+        getName: (...args) => invokeIPC('SESSION_GET_NAME', ...args),
+        getState: (...args) => invokeIPC('SESSION_GET_STATE', ...args),
+        join: (...args) => invokeIPC('SESSION_JOIN', ...args),
+        leave: (...args) => invokeIPC('SESSION_LEAVE', ...args),
+        onState: menuEventHandler<[SessionState]>(
+            IPC_CHANNELS.SESSION_ON_STATE,
+        ),
+        start: (...args) => invokeIPC('SESSION_START', ...args),
+    },
+    onMenuOpenSession: menuEventHandler(MENU_CHANNELS.OPEN_SESSION),
 };
 
 // Expose the API to the renderer process

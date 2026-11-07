@@ -11,6 +11,8 @@ import { ErrorDisplay } from './components/ErrorDisplay';
 import { Settings } from './components/Settings';
 import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
+import { SessionButton, SessionPanel } from './components/SessionPanel';
+import { useSessionState } from './hooks/useSessionState';
 import { ModuleProfile } from './components/ModuleProfile';
 import { MigrationDiffModal } from './components/MigrationDiffModal';
 import {
@@ -174,6 +176,9 @@ function App() {
     const [isRecording, setIsRecording] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
+    const [isSessionOpen, setIsSessionOpen] = useState(false);
+    const closeSession = useCallback(() => setIsSessionOpen(false), []);
+    const sessionState = useSessionState();
     const [isPaletteOpen, setIsPaletteOpen] = useState(false);
     const [isModuleProfileOpen, setIsModuleProfileOpen] = useState(false);
     const [migrationState, setMigrationState] = useState<{
@@ -2537,6 +2542,9 @@ function App() {
         const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
             executeCommand('shoreline.openSettings');
         });
+        const cleanupOpenSession = electronAPI.onMenuOpenSession(() =>
+            setIsSessionOpen(true),
+        );
         const cleanupOpenEngineHealth = electronAPI.onMenuOpenEngineHealth(
             () => {
                 setIsEngineHealthOpen(true);
@@ -2684,6 +2692,7 @@ function App() {
             cleanupTogglePerformanceWindow();
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
+            cleanupOpenSession();
             cleanupOpenModuleProfile();
             cleanupMigrateBuffer();
             cleanupMigrateWavetable();
@@ -2780,6 +2789,10 @@ function App() {
                     }}
                     onUpdatePatch={() => handleSubmitRef.current()}
                 />
+                <SessionButton
+                    state={sessionState}
+                    onOpen={() => setIsSessionOpen(true)}
+                />
             </header>
 
             <ErrorDisplay
@@ -2791,6 +2804,12 @@ function App() {
             <Settings
                 isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}
+            />
+
+            <SessionPanel
+                isOpen={isSessionOpen}
+                onClose={closeSession}
+                state={sessionState}
             />
 
             <EngineHealth
