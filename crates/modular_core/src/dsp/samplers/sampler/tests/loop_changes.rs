@@ -89,7 +89,7 @@ fn gate_falling_near_a_hard_seam_still_fades_out() {
     // on past the end for a full 48-frame fade.
     let wav_data = make_test_wav(vec![vec![0.2; 480]]);
     let mut sampler = make_direct(
-        params_with(json!({ "gate": 5.0, "fade": 1.0, "loop": true })),
+        params_with(json!({ "gate": 5.0, "fade": 1.0, "mode": "loop" })),
         wav_data,
     );
     run(&mut sampler, 470);
@@ -111,7 +111,7 @@ fn gate_falling_near_a_hard_seam_still_fades_out() {
 fn held_loop_never_stays_silent_under_live_changes() {
     // Sweep speed (through and near zero, both directions), the slice
     // signal (onto empty and unsorted slices), the slice param itself,
-    // `loop`, and the fade, with the gate held. Whenever `loop` is on and
+    // the mode, and the fade, with the gate held. Whenever the mode is loop and
     // the selected slice is non-empty, the sampler must be playing
     // within a sample, and the output must stay finite.
     let wav: Vec<f32> = (0..4800).map(|i| ((i as f32) * 0.05).sin() * 0.5).collect();
@@ -155,7 +155,10 @@ fn held_loop_never_stays_silent_under_live_changes() {
                     })
                 };
             } else if r < 0.85 {
-                sampler.params.looping = !sampler.params.looping;
+                sampler.params.mode = match sampler.params.mode {
+                    SamplerMode::Loop => SamplerMode::Once,
+                    _ => SamplerMode::Loop,
+                };
             } else {
                 sampler.params.fade = rnd() * 20.0;
                 sampler.on_patch_update();
@@ -169,7 +172,7 @@ fn held_loop_never_stays_silent_under_live_changes() {
                     "trial {trial} step {step}: non-finite output"
                 );
                 let (lo, hi) = sampler.window(frame_count, max_frame);
-                if sampler.params.looping && hi > lo && !sampler.state.playing {
+                if sampler.params.mode == SamplerMode::Loop && hi > lo && !sampler.state.playing {
                     silent_run += 1;
                     assert!(
                         silent_run <= 1,
@@ -187,7 +190,7 @@ fn held_loop_never_stays_silent_under_live_changes() {
 fn retrigger_near_a_whole_file_loop_end_fades_out() {
     let wav_data = make_test_wav(vec![vec![0.2; 480]]);
     let mut sampler = make_direct(
-        params_with(json!({ "gate": 5.0, "fade": 1.0, "loop": true })),
+        params_with(json!({ "gate": 5.0, "fade": 1.0, "mode": "loop" })),
         wav_data,
     );
     run(&mut sampler, 470);

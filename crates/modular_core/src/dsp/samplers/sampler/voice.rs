@@ -98,7 +98,7 @@ impl Voice {
         }
     }
 
-    /// Shape the span for a gate release: gain falls from its current value
+    /// Shape the span for a timed release: gain falls from its current value
     /// to silence `fade` frames from the current position in either
     /// direction. Toward the edge the voice is heading for, the fade runs on
     /// past that edge as far as the file allows; with `bounded`, the voice
@@ -127,21 +127,22 @@ impl Voice {
 /// crossfade, so a seam release and a gate release can overlap.
 pub(super) const RELEASE_SLOTS: usize = 2;
 
-/// A previous pass that keeps sounding at a fading gain after the gate falls
-/// or a loop seam, so neither the stop nor the jump to a new pass clicks.
+/// A previous pass that keeps sounding at a fading gain after a release,
+/// retrigger, or loop seam, so neither the stop nor the jump to a new pass
+/// clicks.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Release {
     pub(super) voice: Voice,
     pub(super) active: bool,
     /// Also ramps down over `fade_out_samples`, which bounds the ring-out to
-    /// the fade time regardless of speed: from the start for a gate release,
-    /// and once the voice stops or turns back for a seam release. Until then
+    /// the fade time regardless of speed: from the start for a gate or
+    /// retrigger release, and once the voice stops or turns back for a seam release. Until then
     /// a seam release fades by its span ramp alone, which mirrors the new
     /// pass's fade-in so the two sum to unity.
     timed: bool,
     countdown: u32,
-    /// The gain a timed release ramps down from: the voice's gain when the
-    /// gate fell, or when a seam release stopped or turned back.
+    /// The gain a timed release ramps down from: the voice's gain when it
+    /// was released, or when a seam release stopped or turned back.
     ceiling: f32,
     /// This sample's gain.
     level: f32,
@@ -162,8 +163,8 @@ impl Release {
         }
     }
 
-    /// A release for a voice the gate let go of at `gain`.
-    pub(super) fn gate(voice: Voice, gain: f32, fade_out_samples: u32) -> Self {
+    /// A release that ramps a voice down from `gain` over the fade time.
+    pub(super) fn timed(voice: Voice, gain: f32, fade_out_samples: u32) -> Self {
         Self {
             voice,
             active: true,

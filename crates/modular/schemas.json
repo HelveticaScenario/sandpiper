@@ -25624,26 +25624,25 @@
   },
   {
     "name": "$sampler",
-    "documentation": "Gated sample player. Each gate rising edge starts playback of the whole\nfile, or of one slice when `slice` is set; it plays until it ends or the\ngate falls. The slice signal is sampled at the edge: integer part picks\nthe slice point (wrapping), fraction offsets the start into it. Speed\ncontrol allows pitch-shifting and reverse playback (a slice plays the\nsame region backwards). A short `fade` (milliseconds) declicks onsets,\nslice ends, gate releases, and retriggers. With `loop`, the window\nrepeats for as long as the gate stays high, picking the slice again for\neach repeat.\n\n```js\n$sampler($wavs().kick, $pulse('2hz'))\n$sampler($wavs().pad, $pulse('1hz'), { speed: 0.5 })\n$sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })\n$sampler($wavs().pad, $pulse('0.5hz'), { loop: true, fade: 10 })\n```",
+    "documentation": "Sample player. Each gate rising edge starts playback of the whole file,\nor of one slice when `slice` is set. The slice signal is sampled at the\nedge: integer part picks the slice point (wrapping), fraction offsets the\nstart into it. `mode` sets what the gate does next: `'once'` plays the\nwindow through, `'gate'` plays it while the gate is high, and `'loop'`\nrepeats it while the gate is high, picking the slice again for each\nrepeat. Speed control allows pitch-shifting and reverse playback (a slice\nplays the same region backwards). A short `fade` (milliseconds) declicks\nonsets, slice ends, releases, and retriggers.\n\n```js\n$sampler($wavs().kick, $clock.beatTrigger)\n$sampler($wavs().pad, $pulse('1hz'), { speed: 0.5, mode: 'gate' })\n$sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })\n$sampler($wavs().pad, $pulse('0.5hz'), { mode: 'loop', fade: 10 })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "SamplerParams",
       "type": "object",
       "properties": {
         "fade": {
-          "description": "Declick fade in milliseconds: fade-in at onset, fade-out at the window\nexit edge and when the gate falls, and retrigger crossfade. 0 disables.",
+          "description": "Declick fade in milliseconds: fade-in at onset, fade-out at the window\nexit edge and on release, and retrigger crossfade. 0 disables.",
           "type": "number",
           "format": "double",
           "default": 1.0
         },
         "gate": {
-          "description": "Gate input — rising edge starts playback of the selected window,\nwhich sounds while the gate stays high; with `loop`, holding it high\nkeeps it repeating.",
+          "description": "Gate input — rising edge starts playback of the selected window;\n`mode` sets what the gate does after that.",
           "$ref": "#/$defs/MonoSignal"
         },
-        "loop": {
-          "description": "Repeat while the gate is high (default false): each time a pass\nreaches its window's end, the slice is picked again and the next pass\nstarts on time, so passes never drift. With a fade, the crossfade\nuses the audio just before the next window (after it in reverse),\ntopped up by letting the old pass run on past its end. When the gate\nfalls, playback fades out over `fade`; when `loop` turns off or the\nnext slice is empty, the current pass plays out.",
-          "type": "boolean",
-          "default": false
+        "mode": {
+          "description": "What the gate does once playback starts (default `'once'`).",
+          "$ref": "#/$defs/SamplerMode"
         },
         "slice": {
           "description": "Slice selector: a mono signal (whole file as one slice) or\n`[points, signal]` where points are fractions of the total length in\n[0, 1]. Sampled at each gate rising edge and, while looping, once\nper repeat as the pass comes within a fade width of its end: the\ninteger part picks the slice (wrapping), the fraction offsets the\nstart into it.",
@@ -25707,6 +25706,26 @@
               "items": {
                 "$ref": "#/$defs/Signal"
               }
+            }
+          ]
+        },
+        "SamplerMode": {
+          "description": "How the gate controls playback.",
+          "oneOf": [
+            {
+              "description": "Each rising edge plays the window through; the gate falling does\nnothing.",
+              "type": "string",
+              "const": "once"
+            },
+            {
+              "description": "The window repeats while the gate is high: each time a pass reaches\nits window's end, the slice is picked again and the next pass starts\non time, so passes never drift. With a fade, the crossfade uses the\naudio just before the next window (after it in reverse), topped up by\nletting the old pass run on past its end. When the gate falls,\nplayback fades out over `fade`; when the next slice is empty or the\nmode changes, the current pass plays out.",
+              "type": "string",
+              "const": "loop"
+            },
+            {
+              "description": "The window plays while the gate is high and fades out over `fade`\nwhen it falls.",
+              "type": "string",
+              "const": "gate"
             }
           ]
         },
@@ -25792,7 +25811,7 @@
     "signalParams": [
       {
         "name": "gate",
-        "description": "Gate input — rising edge starts playback of the selected window,\nwhich sounds while the gate stays high; with `loop`, holding it high\nkeeps it repeating.",
+        "description": "Gate input — rising edge starts playback of the selected window;\n`mode` sets what the gate does after that.",
         "signalType": "gate",
         "defaultValue": 0.0,
         "minValue": 0.0,
