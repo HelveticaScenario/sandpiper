@@ -47,9 +47,9 @@ fn loop_stops_when_gate_falls() {
     let out = run(&mut sampler, 5);
     assert_close(&out, &[1.0, 2.0, 3.0, 4.0, 1.0]);
     set_gate(&mut sampler, 0.0);
-    // Without a fade, the frame under the head is the last one heard.
+    // Without a fade, playback stops on the sample the gate falls.
     let out = run(&mut sampler, 4);
-    assert_close(&out, &[2.0, 0.0, 0.0, 0.0]);
+    assert_close(&out, &[0.0, 0.0, 0.0, 0.0]);
     assert!(!sampler.state.playing);
 }
 

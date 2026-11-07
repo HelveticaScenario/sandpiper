@@ -95,6 +95,11 @@ fn gate_falling_never_releases_an_exited_voice_over_a_live_release() {
         positions[0] > 100.0,
         "the release must still be the long voice, got {positions:?}"
     );
+    let v = sampler.outputs.sample.get(0);
+    assert!(
+        v > 0.3,
+        "release must stay audible across the edge, got {v}"
+    );
 }
 
 #[test]
@@ -171,12 +176,12 @@ fn gate_falling_without_a_fade_stops_a_one_shot() {
     let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 0.0 })), wav_data);
     assert_close(&run(&mut sampler, 2), &[1.0, 2.0]);
     set_gate(&mut sampler, 0.0);
-    assert_close(&run(&mut sampler, 3), &[3.0, 0.0, 0.0]);
+    assert_close(&run(&mut sampler, 3), &[0.0, 0.0, 0.0]);
     assert!(!sampler.state.playing);
 }
 
 #[test]
-fn gate_falling_in_a_closing_fade_only_steepens_it() {
+fn gate_falling_in_a_closing_fade_keeps_it_falling() {
     // 480-frame file, 2 ms (96-frame) fade: the closing ramp starts at
     // frame 383. Drop the gate 40 frames into it, at gain ~0.58.
     let wav_data = make_test_wav(vec![vec![0.2; 480]]);
@@ -218,4 +223,19 @@ fn gate_falling_on_the_onset_frame_stays_silent() {
     set_gate(&mut sampler, 0.0);
     let out = run(&mut sampler, 60);
     assert!(out.iter().all(|&v| v < 1.0 / 48.0 + 1e-3), "got {out:?}");
+}
+
+#[test]
+fn gate_release_ends_within_the_fade_when_speed_slows() {
+    let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
+    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 1.0 })), wav_data);
+    run(&mut sampler, 200);
+    set_gate(&mut sampler, 0.0);
+    sampler.params.speed = Some(MonoSignal::from_poly(PolySignal::mono(Signal::Volts(
+        0.001,
+    ))));
+    // 48 samples of fade at 1 ms, however little the voice moves.
+    let out = run(&mut sampler, 50);
+    assert_eq!(out[48], 0.0, "got {out:?}");
+    assert!(!releasing(&sampler));
 }

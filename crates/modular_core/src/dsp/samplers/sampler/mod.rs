@@ -130,7 +130,7 @@ struct SamplerState {
 /// each repeat.
 ///
 /// ```js
-/// $sampler($wavs().kick, $pulse('4hz'))
+/// $sampler($wavs().kick, $pulse('2hz'))
 /// $sampler($wavs().pad, $pulse('1hz'), { speed: 0.5 })
 /// $sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })
 /// $sampler($wavs().pad, $pulse('0.5hz'), { loop: true, fade: 10 })
@@ -275,17 +275,21 @@ impl Sampler {
 
     /// The gate fell: the main pass becomes a release voice that fades out
     /// over the fade time, or sooner at the window edge of a pass already
-    /// playing out, so a retrigger crossfades with it.
+    /// playing out, so a retrigger crossfades with it. A silent voice has
+    /// nothing to release and must not displace a live release.
     fn release(&mut self, advance: f64, max_frame: f64) {
-        let mut voice = self.state.main;
-        voice.fade_out(
-            advance >= 0.0,
-            self.state.fade_frames,
-            max_frame,
-            self.state.playing_out,
-        );
-        push_release(&mut self.state.rels, Release::new(voice, advance));
         self.state.playing = false;
+        let mut voice = self.state.main;
+        let fade = self.state.fade_frames;
+        let gain = voice.gain(fade);
+        if gain <= 0.0 {
+            return;
+        }
+        voice.fade_out(advance >= 0.0, fade, max_frame, self.state.playing_out);
+        push_release(
+            &mut self.state.rels,
+            Release::gate(voice, gain, self.state.fade_out_samples),
+        );
     }
 
     /// The playback window in WAV frames for the slice signal's current

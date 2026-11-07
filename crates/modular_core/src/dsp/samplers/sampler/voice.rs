@@ -60,6 +60,16 @@ impl Voice {
         ramp(self.position - self.lo, self.lo_ramp).min(ramp(self.hi - self.position, self.hi_ramp))
     }
 
+    /// How far the voice may read before and after its span: the file's
+    /// ends, or unbounded when reads wrap.
+    fn read_limits(&self, max_frame: f64) -> (f64, f64) {
+        if self.wrap_reads {
+            (f64::NEG_INFINITY, f64::INFINITY)
+        } else {
+            (0.0, max_frame)
+        }
+    }
+
     /// Reads one channel's samples at the voice position.
     pub(super) fn read(&self, samples: &[f32]) -> f32 {
         if self.wrap_reads {
@@ -76,40 +86,28 @@ impl Voice {
     /// must be unity, as it is for a held loop pass.
     pub(super) fn play_out(&mut self, forward: bool, fade: f64, max_frame: f64) {
         let p = self.position;
+        let (lo_limit, hi_limit) = self.read_limits(max_frame);
         if forward {
-            let limit = if self.wrap_reads {
-                f64::INFINITY
-            } else {
-                max_frame
-            };
-            let end = self.hi.max((p + fade).min(limit));
+            let end = self.hi.max((p + fade).min(hi_limit));
             self.hi_ramp = Ramp::Frames(end - (end - fade).max(p));
             self.hi = end;
         } else {
-            let limit = if self.wrap_reads {
-                f64::NEG_INFINITY
-            } else {
-                0.0
-            };
-            let end = self.lo.min((p - fade).max(limit));
+            let end = self.lo.min((p - fade).max(lo_limit));
             self.lo_ramp = Ramp::Frames((end + fade).min(p) - end);
             self.lo = end;
         }
     }
 
-    /// Fade out from the current gain to silence `fade` frames from the
-    /// current position in either direction, so a speed change can't
-    /// prolong it. Toward the edge the voice is heading for, the fade runs
-    /// on past that edge as far as the file allows; with `bounded`, the
-    /// voice still ends at the edge if it comes first.
+    /// Shape the span for a gate release: gain falls from its current value
+    /// to silence `fade` frames from the current position in either
+    /// direction. Toward the edge the voice is heading for, the fade runs on
+    /// past that edge as far as the file allows; with `bounded`, the voice
+    /// still ends at the edge if it comes first. The voice's gain must be
+    /// nonzero.
     pub(super) fn fade_out(&mut self, forward: bool, fade: f64, max_frame: f64, bounded: bool) {
         let p = self.position;
         let g = self.gain_f64(fade);
-        let (lo_limit, hi_limit) = if self.wrap_reads {
-            (f64::NEG_INFINITY, f64::INFINITY)
-        } else {
-            (0.0, max_frame)
-        };
+        let (lo_limit, hi_limit) = self.read_limits(max_frame);
         let run_on = !bounded;
         let hi = (p + fade).min(if run_on && forward { hi_limit } else { self.hi });
         let lo = (p - fade).max(if run_on && !forward {
@@ -117,14 +115,7 @@ impl Voice {
         } else {
             self.lo
         });
-        // A silent voice stays silent: an infinite ramp holds its gain at 0.
-        let ramp = |len: f64| {
-            Ramp::Frames(if g > 0.0 {
-                len.max(0.0) / g
-            } else {
-                f64::INFINITY
-            })
-        };
+        let ramp = |len: f64| Ramp::Frames(len.max(0.0) / g);
         self.hi_ramp = ramp(hi - p);
         self.lo_ramp = ramp(p - lo);
         self.hi = hi.max(p);
@@ -142,15 +133,15 @@ pub(super) const RELEASE_SLOTS: usize = 2;
 pub(super) struct Release {
     pub(super) voice: Voice,
     pub(super) active: bool,
-    /// Set once the voice stops or turns back: it then also ramps down over
-    /// `fade_out_samples`, which bounds the ring-out to the fade time
-    /// regardless of speed. Until then it fades by its span ramp alone: a
-    /// seam release's mirrors the new pass's fade-in so the two sum to unity,
-    /// and a gate release's ends `fade` frames from where the gate fell.
+    /// Also ramps down over `fade_out_samples`, which bounds the ring-out to
+    /// the fade time regardless of speed: from the start for a gate release,
+    /// and once the voice stops or turns back for a seam release. Until then
+    /// a seam release fades by its span ramp alone, which mirrors the new
+    /// pass's fade-in so the two sum to unity.
     timed: bool,
     countdown: u32,
-    /// Ceiling on the span gain. A release whose voice stops or turns back
-    /// becomes timed and never rises above the gain it had then.
+    /// The gain a timed release ramps down from: the voice's gain when the
+    /// gate fell, or when a seam release stopped or turned back.
     ceiling: f32,
     /// This sample's gain.
     level: f32,
@@ -171,6 +162,19 @@ impl Release {
         }
     }
 
+    /// A release for a voice the gate let go of at `gain`.
+    pub(super) fn gate(voice: Voice, gain: f32, fade_out_samples: u32) -> Self {
+        Self {
+            voice,
+            active: true,
+            timed: true,
+            countdown: fade_out_samples,
+            ceiling: gain,
+            level: gain,
+            heading: 0.0,
+        }
+    }
+
     /// The release's gain this sample; it deactivates once spent.
     pub(super) fn gain(&mut self, fade: f64, fade_out_samples: u32) -> f32 {
         if !self.active {
@@ -188,7 +192,7 @@ impl Release {
         } else {
             1.0
         };
-        self.level = self.voice.gain(fade).min(self.ceiling) * t;
+        self.level = self.voice.gain(fade).min(self.ceiling * t);
         self.level
     }
 
