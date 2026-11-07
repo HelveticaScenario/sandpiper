@@ -180,7 +180,8 @@ fn assert_close(got: &[f32], want: &[f32]) {
 /// 4800 frames; slice 0 of `[0.1, 0.2]` is the window [480, 960], with
 /// audio on both sides of it for the seam crossfade (48 frames at 1 ms).
 fn mid_slice_loop(wav: Vec<f32>, extra: serde_json::Value) -> Sampler {
-    let mut params = json!({ "gate": 5.0, "fade": 1.0, "loop": true, "slice": [[0.1, 0.2], 0.0] });
+    let mut params =
+        json!({ "gate": 5.0, "fade": 1.0, "mode": "loop", "slice": [[0.1, 0.2], 0.0] });
     params
         .as_object_mut()
         .unwrap()

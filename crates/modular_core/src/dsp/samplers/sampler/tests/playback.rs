@@ -209,6 +209,17 @@ fn fade_param_bounds() {
 }
 
 #[test]
+fn mode_param_accepts_once_loop_and_gate() {
+    for mode in ["once", "loop", "gate"] {
+        assert!(
+            try_params(params_with(json!({ "mode": mode }))).is_ok(),
+            "{mode}"
+        );
+    }
+    assert!(try_params(params_with(json!({ "mode": "hold" }))).is_err());
+}
+
+#[test]
 fn slice_plays_selected_slice() {
     // Slice 1 of [0, 0.5] covers the second half: frames 2, 3, then silence.
     let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);

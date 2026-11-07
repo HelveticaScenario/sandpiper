@@ -33,35 +33,48 @@ fn fade_ramps_at_onset_and_window_edges() {
 
 #[test]
 fn retrigger_crossfades_without_discontinuity() {
-    let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
-    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 1.0 })), wav_data);
-    // Run past the 48-sample fade-in; steady state is unity (0.2 × 5).
-    for _ in 0..100 {
-        sampler.update(SAMPLE_RATE);
-    }
-    assert!((sampler.outputs.sample.get(0) - 1.0).abs() < 1e-4);
-
-    // Drop the gate below the Schmitt low threshold, then retrigger.
-    set_gate(&mut sampler, 0.0);
-    sampler.update(SAMPLE_RATE);
-    set_gate(&mut sampler, 5.0);
-
     // On a constant-amplitude wav the old voice's release ramp and the new
     // voice's ramp-up hold a constant sum across the whole crossfade: unity
-    // less the one frame the old voice faded while the gate was low.
-    for i in 0..48 {
-        sampler.update(SAMPLE_RATE);
-        let v = sampler.outputs.sample.get(0);
-        assert!(
-            (v - 47.0 / 48.0).abs() < 1e-3,
-            "crossfade sample {i}: expected ~47/48, got {v}"
+    // in once mode, and in gate mode unity less the one frame the old voice
+    // faded while the gate was low.
+    for (mode, sum) in [("once", 1.0), ("gate", 47.0 / 48.0)] {
+        let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
+        let mut sampler = make_direct(
+            params_with(json!({ "gate": 5.0, "fade": 1.0, "mode": mode })),
+            wav_data,
         );
-    }
-    for _ in 0..10 {
+        // Run past the 48-sample fade-in; steady state is unity (0.2 × 5).
+        run(&mut sampler, 100);
+        assert!((sampler.outputs.sample.get(0) - 1.0).abs() < 1e-4);
+
+        // Drop the gate below the Schmitt low threshold, then retrigger.
+        set_gate(&mut sampler, 0.0);
         sampler.update(SAMPLE_RATE);
+        set_gate(&mut sampler, 5.0);
+        for (i, v) in run(&mut sampler, 48).into_iter().enumerate() {
+            assert!(
+                (v - sum).abs() < 1e-3,
+                "{mode}, crossfade sample {i}: expected ~{sum}, got {v}"
+            );
+        }
+        run(&mut sampler, 10);
+        assert!(!releasing(&sampler), "release voice should be spent");
+        assert!((sampler.outputs.sample.get(0) - 1.0).abs() < 1e-4);
     }
-    assert!(!releasing(&sampler), "release voice should be spent");
-    assert!((sampler.outputs.sample.get(0) - 1.0).abs() < 1e-4);
+}
+
+#[test]
+fn once_mode_plays_through_when_the_gate_falls() {
+    let wav_data = make_test_wav(vec![vec![0.2; 480]]);
+    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 1.0 })), wav_data);
+    run(&mut sampler, 100);
+    set_gate(&mut sampler, 0.0);
+    let out = run(&mut sampler, 300);
+    assert!(
+        out.iter().all(|&v| (v - 1.0).abs() < 1e-4),
+        "the pass must play on"
+    );
+    assert!(sampler.state.playing);
 }
 
 #[test]
@@ -69,7 +82,9 @@ fn gate_falling_never_releases_an_exited_voice_over_a_live_release() {
     // Slice 0 spans frames 0..48; slice 1 spans frames 48..4799.
     let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
     let mut sampler = make_direct(
-        params_with(json!({ "gate": 5.0, "fade": 2.0, "slice": [[0.0, 0.01], 1.0] })),
+        params_with(
+            json!({ "gate": 5.0, "mode": "gate", "fade": 2.0, "slice": [[0.0, 0.01], 1.0] }),
+        ),
         wav_data,
     );
     // Voice A: long slice 1, run well into its window, then released.
@@ -148,11 +163,11 @@ fn fade_change_reaches_a_pass_already_playing() {
 }
 
 #[test]
-fn gate_falling_fades_a_one_shot_out() {
+fn gate_mode_fades_out_when_the_gate_falls() {
     for speed in [1.0, -1.0] {
         let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
         let mut sampler = make_direct(
-            params_with(json!({ "gate": 5.0, "fade": 1.0, "speed": speed })),
+            params_with(json!({ "gate": 5.0, "mode": "gate", "fade": 1.0, "speed": speed })),
             wav_data,
         );
         run(&mut sampler, 200);
@@ -171,9 +186,12 @@ fn gate_falling_fades_a_one_shot_out() {
 }
 
 #[test]
-fn gate_falling_without_a_fade_stops_a_one_shot() {
+fn gate_mode_without_a_fade_stops_when_the_gate_falls() {
     let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8, 0.2, 0.4]]);
-    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 0.0 })), wav_data);
+    let mut sampler = make_direct(
+        params_with(json!({ "gate": 5.0, "mode": "gate", "fade": 0.0 })),
+        wav_data,
+    );
     assert_close(&run(&mut sampler, 2), &[1.0, 2.0]);
     set_gate(&mut sampler, 0.0);
     assert_close(&run(&mut sampler, 3), &[0.0, 0.0, 0.0]);
@@ -185,7 +203,10 @@ fn gate_falling_in_a_closing_fade_keeps_it_falling() {
     // 480-frame file, 2 ms (96-frame) fade: the closing ramp starts at
     // frame 383. Drop the gate 40 frames into it, at gain ~0.58.
     let wav_data = make_test_wav(vec![vec![0.2; 480]]);
-    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 2.0 })), wav_data);
+    let mut sampler = make_direct(
+        params_with(json!({ "gate": 5.0, "mode": "gate", "fade": 2.0 })),
+        wav_data,
+    );
     let before = run(&mut sampler, 424);
     let prev = *before.last().unwrap();
     set_gate(&mut sampler, 0.0);
@@ -201,7 +222,10 @@ fn gate_falling_in_a_closing_fade_keeps_it_falling() {
 #[test]
 fn gate_release_ends_within_the_fade_when_speed_reverses() {
     let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
-    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 1.0 })), wav_data);
+    let mut sampler = make_direct(
+        params_with(json!({ "gate": 5.0, "mode": "gate", "fade": 1.0 })),
+        wav_data,
+    );
     run(&mut sampler, 2000);
     set_gate(&mut sampler, 0.0);
     run(&mut sampler, 10);
@@ -218,7 +242,10 @@ fn gate_release_ends_within_the_fade_when_speed_reverses() {
 #[test]
 fn gate_falling_on_the_onset_frame_stays_silent() {
     let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
-    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 1.0 })), wav_data);
+    let mut sampler = make_direct(
+        params_with(json!({ "gate": 5.0, "mode": "gate", "fade": 1.0 })),
+        wav_data,
+    );
     run(&mut sampler, 1);
     set_gate(&mut sampler, 0.0);
     let out = run(&mut sampler, 60);
@@ -228,7 +255,10 @@ fn gate_falling_on_the_onset_frame_stays_silent() {
 #[test]
 fn gate_release_ends_within_the_fade_when_speed_slows() {
     let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
-    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 1.0 })), wav_data);
+    let mut sampler = make_direct(
+        params_with(json!({ "gate": 5.0, "mode": "gate", "fade": 1.0 })),
+        wav_data,
+    );
     run(&mut sampler, 200);
     set_gate(&mut sampler, 0.0);
     sampler.params.speed = Some(MonoSignal::from_poly(PolySignal::mono(Signal::Volts(
@@ -238,4 +268,68 @@ fn gate_release_ends_within_the_fade_when_speed_slows() {
     let out = run(&mut sampler, 50);
     assert_eq!(out[48], 0.0, "got {out:?}");
     assert!(!releasing(&sampler));
+}
+
+#[test]
+fn once_retrigger_crossfade_holds_unity_at_any_speed() {
+    for speed in [0.25, 0.5, 2.0, -0.5] {
+        let wav_data = make_test_wav(vec![vec![0.2; 48000]]);
+        let mut sampler = make_direct(
+            params_with(json!({ "gate": 5.0, "fade": 1.0, "speed": speed })),
+            wav_data,
+        );
+        run(&mut sampler, 400);
+        set_gate(&mut sampler, 0.0);
+        sampler.update(SAMPLE_RATE);
+        set_gate(&mut sampler, 5.0);
+        for (i, v) in run(&mut sampler, 400).into_iter().enumerate() {
+            assert!(
+                (v - 1.0).abs() < 1e-3,
+                "speed {speed}, sample {i}: expected ~1.0, got {v}"
+            );
+        }
+    }
+}
+
+#[test]
+fn switching_to_gate_mode_with_the_gate_low_releases_the_pass() {
+    let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
+    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 1.0 })), wav_data);
+    run(&mut sampler, 100);
+    set_gate(&mut sampler, 0.0);
+    run(&mut sampler, 100);
+    assert!(
+        sampler.state.playing,
+        "once mode plays on with the gate low"
+    );
+    sampler.params.mode = SamplerMode::Gate;
+    let out = run(&mut sampler, 60);
+    assert_eq!(*out.last().unwrap(), 0.0);
+    assert!(!sampler.state.playing);
+}
+
+#[test]
+fn once_retrigger_without_a_fade_cuts_to_the_new_pass() {
+    let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8, 0.2, 0.4]]);
+    let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 0.0 })), wav_data);
+    assert_close(&run(&mut sampler, 3), &[1.0, 2.0, 3.0]);
+    set_gate(&mut sampler, 0.0);
+    sampler.update(SAMPLE_RATE);
+    set_gate(&mut sampler, 5.0);
+    assert_close(&run(&mut sampler, 2), &[1.0, 2.0]);
+    assert!(!releasing(&sampler));
+}
+
+#[test]
+fn sub_sample_fade_still_releases_over_a_sample() {
+    let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
+    let mut sampler = make_direct(
+        params_with(json!({ "gate": 5.0, "mode": "gate", "fade": 0.01 })),
+        wav_data,
+    );
+    run(&mut sampler, 100);
+    set_gate(&mut sampler, 0.0);
+    let out = run(&mut sampler, 3);
+    assert!(out[0] > 0.0, "the release must sound, got {out:?}");
+    assert_eq!(out[2], 0.0);
 }

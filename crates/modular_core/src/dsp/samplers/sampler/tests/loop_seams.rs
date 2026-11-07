@@ -6,7 +6,7 @@ use super::*;
 fn loop_repeats_whole_file_with_exact_period() {
     let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
     let mut sampler = make_direct(
-        params_with(json!({ "gate": 5.0, "fade": 0.0, "loop": true })),
+        params_with(json!({ "gate": 5.0, "fade": 0.0, "mode": "loop" })),
         wav_data,
     );
     let out = run(&mut sampler, 12);
@@ -17,7 +17,9 @@ fn loop_repeats_whole_file_with_exact_period() {
 fn loop_repeats_selected_slice() {
     let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
     let mut sampler = make_direct(
-        params_with(json!({ "gate": 5.0, "fade": 0.0, "loop": true, "slice": [[0.0, 0.5], 0.0] })),
+        params_with(
+            json!({ "gate": 5.0, "fade": 0.0, "mode": "loop", "slice": [[0.0, 0.5], 0.0] }),
+        ),
         wav_data,
     );
     let out = run(&mut sampler, 6);
@@ -28,7 +30,7 @@ fn loop_repeats_selected_slice() {
 fn loop_repeats_in_reverse() {
     let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
     let mut sampler = make_direct(
-        params_with(json!({ "gate": 5.0, "speed": -1.0, "fade": 0.0, "loop": true })),
+        params_with(json!({ "gate": 5.0, "speed": -1.0, "fade": 0.0, "mode": "loop" })),
         wav_data,
     );
     // Reverse enters at the window end, one past the last frame, which
@@ -41,7 +43,7 @@ fn loop_repeats_in_reverse() {
 fn loop_stops_when_gate_falls() {
     let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
     let mut sampler = make_direct(
-        params_with(json!({ "gate": 5.0, "fade": 0.0, "loop": true })),
+        params_with(json!({ "gate": 5.0, "fade": 0.0, "mode": "loop" })),
         wav_data,
     );
     let out = run(&mut sampler, 5);
@@ -110,7 +112,7 @@ fn whole_file_loop_is_a_seamless_ring() {
     // crossfade and the output is the file repeating sample for sample.
     let wav: Vec<f32> = (0..480).map(|i| i as f32 / 480.0).collect();
     let mut sampler = make_direct(
-        params_with(json!({ "gate": 5.0, "fade": 1.0, "loop": true })),
+        params_with(json!({ "gate": 5.0, "fade": 1.0, "mode": "loop" })),
         make_test_wav(vec![wav.clone()]),
     );
     let out = run(&mut sampler, 480 * 4);
@@ -208,7 +210,9 @@ fn window_shorter_than_the_fade_still_loops() {
     // length, so every pass still advances through the window.
     let wav_data = make_test_wav(vec![vec![0.2; 16]]);
     let mut sampler = make_direct(
-        params_with(json!({ "gate": 5.0, "fade": 1.0, "loop": true, "slice": [[0.5, 0.75], 0.0] })),
+        params_with(
+            json!({ "gate": 5.0, "fade": 1.0, "mode": "loop", "slice": [[0.5, 0.75], 0.0] }),
+        ),
         wav_data,
     );
     let mut wraps = 0;
