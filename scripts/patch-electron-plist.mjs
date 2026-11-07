@@ -43,8 +43,9 @@ if (!existsSync(plist)) {
 }
 
 const description =
-    'Shoreline uses the local network to sync tempo with other music apps via Ableton Link.';
-const bonjourService = '_SessionStatus._tcp';
+    'Shoreline uses the local network to sync tempo with other music apps via Ableton Link and to find and join live share sessions.';
+// Ableton Link's, and live share's (src/main/liveShare/discovery.ts).
+const bonjourServices = ['_SessionStatus._tcp', '_shoreline-share._tcp'];
 const bundleName = `Shoreline Dev (${basename(root)})`;
 
 function plistBuddy(command) {
@@ -103,9 +104,17 @@ for (const entry of readdirSync(resources)) {
 
 if (plistBuddy(`Print :NSBonjourServices`) === null) {
     plistBuddy(`Add :NSBonjourServices array`);
-    plistBuddy(`Add :NSBonjourServices:0 string '${bonjourService}'`);
     changed = true;
-    console.log('[patch-electron-plist] Added NSBonjourServices');
+}
+const declaredServices = plistBuddy(`Print :NSBonjourServices`) ?? '';
+for (const service of bonjourServices) {
+    if (!declaredServices.includes(service)) {
+        plistBuddy(`Add :NSBonjourServices: string '${service}'`);
+        changed = true;
+        console.log(
+            `[patch-electron-plist] Declared Bonjour service ${service}`,
+        );
+    }
 }
 
 // LaunchServices caches the bundle name the Dock shows, so refresh it even when

@@ -26,6 +26,11 @@ import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
 import type { EqPanelDef } from './dsl/eqPanelTypes';
 import type {
+    DiscoveredSession,
+    JoinSessionRequest,
+    LiveShareStatus,
+} from './liveShare';
+import type {
     VideoCvValue,
     VideoPreviewSite,
     VideoPull,
@@ -347,6 +352,7 @@ export const IPC_CHANNELS = {
     SYNTH_RESTART_AUDIO: 'modular:synth:restart-audio',
     SYNTH_PANIC_LOG_DIR: 'modular:synth:panic-log-dir',
     SHELL_OPEN_PATH: 'modular:shell:open-path',
+    CLIPBOARD_WRITE_TEXT: 'modular:clipboard:write-text',
 
     // Audio device operations
     AUDIO_REFRESH_DEVICE_CACHE: 'modular:audio:refresh-device-cache',
@@ -428,6 +434,17 @@ export const IPC_CHANNELS = {
     // WAV operations
     WAVS_ON_CHANGE: 'modular:wavs:on-change',
 
+    // Live share sessions
+    LIVE_SHARE_GET_STATUS: 'modular:live-share:get-status',
+    LIVE_SHARE_HOST: 'modular:live-share:host',
+    LIVE_SHARE_JOIN: 'modular:live-share:join',
+    LIVE_SHARE_LEAVE: 'modular:live-share:leave',
+    LIVE_SHARE_BROWSE: 'modular:live-share:browse',
+    LIVE_SHARE_STOP_BROWSING: 'modular:live-share:stop-browsing',
+    LIVE_SHARE_ON_STATUS: 'modular:live-share:on-status',
+    LIVE_SHARE_ON_DISCOVERED: 'modular:live-share:on-discovered',
+    LIVE_SHARE_ON_ENDED: 'modular:live-share:on-ended',
+
     // Update operations
     UPDATE_CHECK: 'modular:update:check',
     UPDATE_DOWNLOAD: 'modular:update:download',
@@ -447,6 +464,7 @@ export const MENU_CHANNELS = {
     NEW_FILE: 'modular:menu:new-file',
     OPEN_ENGINE_HEALTH: 'modular:menu:open-engine-health',
     OPEN_MODULE_PROFILE: 'modular:menu:open-module-profile',
+    OPEN_LIVE_SHARE: 'modular:menu:open-live-share',
     OPEN_SETTINGS: 'modular:menu:open-settings',
     OPEN_WORKSPACE: 'modular:menu:open-workspace',
     SAVE: 'modular:menu:save',
@@ -528,6 +546,7 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SYNTH_PANIC_LOG_DIR]: typeof Synthesizer.prototype.panicLogDir;
 
     [IPC_CHANNELS.SHELL_OPEN_PATH]: (path: string) => Promise<string>;
+    [IPC_CHANNELS.CLIPBOARD_WRITE_TEXT]: (text: string) => void;
 
     // Audio device operations
     [IPC_CHANNELS.AUDIO_REFRESH_DEVICE_CACHE]: typeof Synthesizer.prototype.refreshDeviceCache;
@@ -638,6 +657,22 @@ export interface IPCHandlers {
 
     /** A watched file changed on disk; `content` is as FS_READ_FILE returns. */
     [IPC_CHANNELS.FS_ON_FILE_CHANGED]: (change: FileChange) => void;
+
+    // Live share sessions
+    [IPC_CHANNELS.LIVE_SHARE_GET_STATUS]: () => LiveShareStatus;
+    [IPC_CHANNELS.LIVE_SHARE_HOST]: () => Promise<LiveShareStatus>;
+    [IPC_CHANNELS.LIVE_SHARE_JOIN]: (
+        request: JoinSessionRequest,
+    ) => Promise<LiveShareStatus>;
+    [IPC_CHANNELS.LIVE_SHARE_LEAVE]: () => void;
+    /** Report sessions on the network through LIVE_SHARE_ON_DISCOVERED. */
+    [IPC_CHANNELS.LIVE_SHARE_BROWSE]: () => void;
+    [IPC_CHANNELS.LIVE_SHARE_STOP_BROWSING]: () => void;
+    [IPC_CHANNELS.LIVE_SHARE_ON_STATUS]: (status: LiveShareStatus) => void;
+    [IPC_CHANNELS.LIVE_SHARE_ON_DISCOVERED]: (
+        sessions: DiscoveredSession[],
+    ) => void;
+    [IPC_CHANNELS.LIVE_SHARE_ON_ENDED]: (reason: string) => void;
 
     // Update operations (invokable)
     [IPC_CHANNELS.UPDATE_CHECK]: () => void;
